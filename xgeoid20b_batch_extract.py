@@ -7,10 +7,10 @@
 # Horizontal Reference Frame: IGS14
 # Ellipsoid:                  GRS80
 # Latitude/Longitude:         Decimal degrees
-# Ellipsoidal Height:         Meters, against GRS80 ellipsoid in IGS14 frame
+# Ellipsoidal Height:         Meters, GRS80 ellipsoid, IGS14 reference frame
 #
 # --- LONGITUDE CONVENTION WARNING ---
-# This script expects NGS-style POSITIVE WEST longitudes as exported by
+# This script expects POSITIVE WEST longitudes as exported by
 # OPUS and other NGS tools (e.g., 133.024 for southeastern Alaska).
 # The script automatically negates positive longitudes and converts
 # to 0-360 east convention internally for grid lookup.
@@ -18,9 +18,9 @@
 # WARNING: Do NOT mix negative-west (-133.024) and positive-west (133.024)
 #          longitudes in the same input CSV. The script will detect negative
 #          longitudes, flag them in the log file, and skip negation for
-#          those rows — but mixed convention inputs may produce incorrect
+#          those rows — but mixed convention inputs likely will produce incorrect
 #          results. Ensure all longitudes in the input file use the same
-#          convention before running.
+#          convention
 #
 # NOTE: OPUS-derived coordinates and ellipsoidal heights are in NAD83(2011),
 #       which is nominally equivalent to IGS14 at the cm level for most
@@ -33,6 +33,7 @@
 # Author:                     Nathan Murry, NOAA National Geodetic Survey
 # =============================================================================
 
+
 import netCDF4 as nc
 import numpy as np
 import csv
@@ -40,14 +41,17 @@ import os
 import sys
 from datetime import datetime
 
+
 # --- File Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FILE_PATH = r"C:\Users\nathan.murry\NOAA\Geodesy\GEOID_Legacy\xGEOID20b\xGEOID20.ggxf"
+
 
 # --- Constants ---
 MODEL = 'xGEOID20B'
 EPOCH = 2020.0
 T0 = 2005.0
+
 
 # --- Region Definitions ---
 REGIONS = {
@@ -118,7 +122,7 @@ def normalize_lon(lon):
 
 def correct_ngs_lon(lon, pid='UNKNOWN'):
     """
-    Detect and correct NGS-style positive west longitudes.
+    Detect and correct positive west longitudes.
 
     NGS commonly exports west longitudes as positive values
     (e.g., 133.024 instead of -133.024).
@@ -242,7 +246,7 @@ def generate_log_filename(input_path):
 
 
 # =============================================================================
-# Core Interpolation
+# Bi-quadratic Interpolation
 # =============================================================================
 
 def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
@@ -317,7 +321,7 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
 
 
 # =============================================================================
-# Extraction
+# Grid Extraction
 # =============================================================================
 
 def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
@@ -343,7 +347,7 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
         All extracted and computed values, or None if point not in any grid.
     """
 
-    # --- Correct NGS positive-west longitude convention ---
+    # --- Correct positive-west longitude convention ---
     lon360, lon_warning = correct_ngs_lon(lon, pid=pid)
 
     # --- Find highest-priority grid containing this point ---

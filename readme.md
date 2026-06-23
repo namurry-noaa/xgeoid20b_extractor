@@ -3,8 +3,8 @@
 
 ## Overview
 This tool extracts geoid undulation values (N) from the NGS experimental 
-xGEOID20B geoid model and computes orthometric heights from GRS80 ellipsoidal 
-heights. It is intended for internal NOAA/NGS use only.
+xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoidal 
+height (h).
 
 The xGEOID20B model is a deprecated research-grade geoid model and is no longer 
 available through NGS online tools. This script provides a local extraction 
@@ -45,15 +45,15 @@ The xGEOID20B model covers the following regions:
 | Horizontal Reference Frame | IGS14 |
 | Ellipsoid | GRS80 |
 | Latitude | Decimal degrees, positive north |
-| Longitude | NGS positive-west convention (e.g., 133.024 for SE Alaska) |
-| Ellipsoidal Height | Meters, against GRS80 in IGS14 frame |
+| Longitude | positive-west convention (e.g., 133.024 for SE Alaska) |
+| Ellipsoidal Height | Meters, GRS80 ellipsoid, IGS14 reference frame |
 
 > **⚠️ Longitude Convention Warning:**
-> This tool expects NGS-style **positive west** longitudes as exported by OPUS
+> This tool expects **positive west** longitudes as exported by OPUS
 > and other NGS tools. Do **not** mix positive-west and negative-west longitudes
 > in the same input file. The script will detect negative longitudes, flag them
 > in the batch log, and skip negation for those rows — but mixed convention
-> inputs may produce incorrect results.
+> inputs will likely produce incorrect results.
 
 > **📝 Reference Frame Note:**
 > OPUS-derived coordinates are in NAD83(2011), which is nominally equivalent
@@ -112,20 +112,12 @@ FILE_PATH = r"C:\your\local\path\xGEOID20.ggxf"
 
 
 ## Requirements
+Python 3.10+
+
 See requirements.txt for Python dependencies.
 
 Install dependencies with:
-
-bash
-Save
-Copy
-1
 pip install -r requirements.txt
-Tested with:
-
-Python 3.10+
-Spyder 5.5.6
-Miniconda3
 
 
 ## Input File Format
@@ -135,8 +127,8 @@ filename (e.g., AK_panhandle_input.csv).
 Required columns:
 
 OPUS_PID,lat,lon,ellip_h_m
-Example:
 
+Example:
 OPUS_PID,lat,lon,ellip_h_m
 BBFG38,55.03511259,133.0239682,-1.964
 BBBW71,55.09597375,131.2221351,-2.312
@@ -145,10 +137,7 @@ BBBW71,55.09597375,131.2221351,-2.312
 ## Output Files
 The script generates two output files in the same directory as the script:
 
-Output CSV
-Filename: input filename with input replaced by output
-(e.g., AK_panhandle_output.csv)
-
+1.  Output CSV Filename: input filename with "input" replaced by "output" (e.g., AK_panhandle_output.csv)
 Column Description:
 OPUS_PID -- NGS OPUS Permanent Identifier
 lat -- Latitude (decimal degrees, 8dp)
@@ -161,8 +150,7 @@ epoch -- Processing epoch
 undulation_N_epoch_corrected_m -- Epoch-corrected undulation N (m, 4dp)
 orthometric_H_epoch_corrected_m -- Epoch-corrected orthometric height H (m, 4dp)
 
-
-## Batch Log
+2.  Batch Log
 Filename: input filename with _batch_log.txt appended
 (e.g., AK_panhandle_input_batch_log.txt)
 
@@ -182,7 +170,7 @@ EPOCH     = 2020.0                                  # processing epoch
 T0        = 2005.0                                  # model reference epoch
 
 
-##Sample Test
+## Sample Test
 A sample test file sample_test_input.csv is included in the repository.
 To verify the script is working correctly, run it against this file and
 confirm the following expected output:

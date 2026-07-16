@@ -3,12 +3,10 @@
 
 ## Overview
 This tool extracts geoid undulation values (N) from the NGS experimental 
-xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoidal 
-height (h).
+xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoid height (h).
 
 The xGEOID20B model is a deprecated research-grade geoid model and is no longer 
-available through NGS online tools. This script provides a local extraction 
-capability against the raw GGXF grid file.
+available through NGS online tools.  However, this script provides legacy extraction capability against the against the xGEOID20 GGXF grid file, to which a link is privded below.
 
 
 ## Background
@@ -27,6 +25,7 @@ Where:
 - `H` = orthometric height (m)
 - `h` = ellipsoidal height (m), GRS80, IGS14 frame
 - `N` = geoid undulation (m) from xGEOID20B
+
 
 ## Coverage
 The xGEOID20B model covers the following regions:
@@ -85,11 +84,7 @@ placed in the location specified by the `FILE_PATH` constant in the script.
 
 
 ### Obtaining the GGXF File:
-> **⚠️ NOAA Internal Access Only**
-> The following URL is accessible from the NOAA internal network only.
-
-Download the file from the NGS internal data server:
-
+Download the file from the following link:
 https://geodesy.noaa.gov/research/data/xGEOID20.ggxf
 
 
@@ -171,28 +166,15 @@ T0        = 2005.0                                  # model reference epoch
 
 
 ## Sample Test
-A sample test file sample_test_input.csv is included in the repository.
-To verify the script is working correctly, run it against this file and
-confirm the following expected output:
+A sample test file AK_Example_INput.csv and AK_Example_Output.csv are included in the repository to verify the script is working correctly.  Run the script against the input file, and confirm the expected output in teh output file.
 
-Field     Expected Value
-OPUS_PID  BBFG38
-region    CONUSPAC
-undulation_N_m   -4.0193
-orthometric_H_m  2.0553
-undulation_N_epoch_corrected_m  -4.0208
-orthometric_H_epoch_corrected_m  2.0568
-
-
-These values have been validated against archived NGS xGEOID20B web tool
-output and are considered the reference standard for this tool.
+These values have been validated against the archived NGS xGEOID20B web tool
+output, which is considered the reference standard for this tool.
 
 
 ## Validation
 This tool has been validated against archived NGS xGEOID20B web tool output
-for benchmark points in the southeastern Alaska panhandle region and broader
-CONUSPAC coverage area. Observed differences are consistently within
-0.001—0.004 m, well within the model's stated operational accuracy of ±0.01 m.
+for benchmark points in the southeastern Alaska panhandle region.  Observed differences are consistently within 0.001—0.004 m, well within the model's stated operational accuracy of ±0.01 m.
 
 
 ## License
@@ -201,7 +183,4 @@ See LICENSE for terms of use.
 
 ## Notes
 The xGEOID20B GGXF file is not included in this repository and must
-be obtained from the NGS internal data server (see Data File section).
-This tool is for internal NOAA use only and is not intended for public distribution.
-The xGEOID20B model is research-grade and deprecated. Results should be used
-accordingly and not cited as official NGS products.
+be obtained via the link abiove, (see the Data File section).  This tool is for research use and not intended for use in any production environment.  The xGEOID20 model is research-grade and considered deprecated.  Results should be used in accordance with the notes above.

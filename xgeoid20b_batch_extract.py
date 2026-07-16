@@ -7,8 +7,8 @@
 # Horizontal Reference Frame: IGS14
 # Ellipsoid:                  GRS80
 # Latitude/Longitude:         Decimal degrees
-# Ellipsoidal Height:         Meters, GRS80 ellipsoid, IGS14 reference frame
-#
+# Ellipsoidal Height:         Meters
+# 
 # --- LONGITUDE CONVENTION WARNING ---
 # This script expects POSITIVE WEST longitudes as exported by
 # OPUS and other NGS tools (e.g., 133.024 for southeastern Alaska).
@@ -30,8 +30,8 @@
 #
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
-# Author:                     Nathan Murry, NOAA National Geodetic Survey
-# =============================================================================
+# Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
+# # =============================================================================
 
 
 import netCDF4 as nc

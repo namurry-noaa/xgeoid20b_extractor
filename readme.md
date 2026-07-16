@@ -6,7 +6,7 @@ This tool extracts geoid undulation values (N) from the NGS experimental
 xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoid height (h).
 
 The xGEOID20B model is a deprecated research-grade geoid model and is no longer 
-available through NGS online tools.  However, this script provides legacy extraction capability against the against the xGEOID20 GGXF grid file, to which a link is privded below.
+available through NGS online tools.  However, this script provides legacy extraction capability against the against the xGEOID20 GGXF grid file, to which a link is provided below.
 
 
 ## Background

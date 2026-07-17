@@ -31,7 +31,7 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.1.0
+# Version:                    2.2.0
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -52,7 +52,7 @@ import configparser
 from datetime import datetime, timezone
 
 
-__version__ = '2.1.0'
+__version__ = '2.2.0'
 
 
 # --- File Paths ---

@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-07-17
+
+### Added
+- `run.ps1` PowerShell launcher. It selects the conda environment, verifies
+  conda + the environment + required packages (netCDF4, numpy), then runs
+  the tool. Data/input/output issues are still handled by the Python tool.
+- `environment.yml` conda environment definition (channel: conda-forge;
+  creates an env named `xgeoid`). Conda is now the recommended package
+  manager, since netCDF4/numpy depend on compiled binaries that conda
+  resolves more reliably than pip.
+- `[runtime]` section in `config.ini` with `conda_root` and `conda_env`,
+  read only by `run.ps1`. Blank `conda_root` autodetects conda (PATH, then
+  common user-profile locations); an explicit value overrides autodetect
+  entirely. Blank `conda_env` uses the base environment.
+- README "Quick Start" and "Running the Tool" sections; Requirements
+  section now conda-first.
+
+### Backward compatibility
+- Non-breaking (MINOR). The Python tool is unchanged in behavior; the
+  launcher and environment definition are additive. You can still run
+  `python xgeoid20b_batch_extract.py` directly in any environment that has
+  the dependencies.
+
 ## [2.1.0] - 2026-07-17
 
 ### Added

@@ -5,6 +5,38 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-07-17
+
+### Added
+- `config.ini` (optional) for GGXF path, input/output folders, model,
+  epoch, T0, and overwrite policy. Missing file or blank values fall back
+  to built-in defaults, so the tool still runs out of the box.
+- Dedicated `input/` and `output/` folders (each with a tracked
+  `README.txt`). Input CSVs are read from `input/`; results are written to
+  `output/`.
+- UTC (GMT) timestamped output and log filenames, to the minute
+  (`<inputbase>_output_YYYYMMDDThhmmZ.csv` /
+  `..._batch_log_YYYYMMDDThhmmZ.txt`). All in-file timestamps are UTC too.
+- Error-and-exit if more than one `*input*.csv` is found (lists the
+  candidates) instead of silently picking one.
+- GGXF resolution now also honors `config.ini [paths] ggxf_file`
+  (order: env var, then config, then `GGXF/xGEOID20.ggxf`).
+
+### Changed
+- Default run is now non-interactive: `overwrite = always`. Timestamped
+  filenames mean runs normally do not collide. `overwrite = prompt` and
+  `never` remain available; `prompt` degrades to `always` when stdin is
+  not an interactive terminal (prevents hangs in scheduled/piped runs).
+- Sample files moved into the new folders: `input/ak_example_input.csv`
+  and `output/ak_example_output.csv`.
+- README expanded with a prominent "Default Behavior" section and a
+  "Configuration" section.
+
+### Backward compatibility
+- Non-breaking (MINOR). If `config.ini` is absent the tool uses defaults;
+  if the `input/` folder is absent it falls back to scanning the script
+  directory as before.
+
 ## [2.0.0] - 2026-07-17
 
 ### Changed (breaking)

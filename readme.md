@@ -31,6 +31,16 @@ overwriting, set `overwrite = prompt`; to never overwrite, set
 `overwrite = never`.
 
 
+## Quick Start
+1. Create the conda environment: `conda env create -f environment.yml`
+2. Obtain the GGXF grid file (see [Data File](#data-file)).
+3. Put your input CSV in the `input/` folder.
+4. Run: `.\run.ps1`
+
+Results appear in `output/`. See [Running the Tool](#running-the-tool) for
+details and configuration.
+
+
 
 ## Background
 The xGEOID20 model consists of two variants:
@@ -144,12 +154,69 @@ configured so the downloaded `*.ggxf` file is never committed.
 
 
 ## Requirements
-Python 3.10+
+Python 3.10+ and two packages: **netCDF4** and **numpy**.
 
-See requirements.txt for Python dependencies.
+**Conda is the recommended package manager.** netCDF4 and numpy depend on
+compiled binary libraries (HDF5, netCDF-C); conda resolves and installs
+those far more reliably than pip. Create the environment from the included
+definition:
 
-Install dependencies with:
-pip install -r requirements.txt
+```
+conda env create -f environment.yml      # creates an env named 'xgeoid'
+```
+
+(A `requirements.txt` is also provided for pip users, but conda is
+preferred for this tool.)
+
+
+## Running the Tool
+
+The simplest way to run is the included PowerShell launcher, **`run.ps1`**,
+which selects the correct conda environment, verifies it, and then runs the
+tool:
+
+```powershell
+.\run.ps1
+```
+
+That's it — drop your input CSV in `input/`, make sure the GGXF grid file
+is available (see [Data File](#data-file)), and run `.\run.ps1`. Results
+land in `output/` with UTC-timestamped names.
+
+### How the launcher picks the environment
+The launcher reads the `[runtime]` section of `config.ini`:
+
+```ini
+[runtime]
+conda_root =        ; blank = autodetect; else path to your conda install
+conda_env  =        ; blank = base env; else a named env (e.g. xgeoid)
+```
+
+- **`conda_root`** — leave blank to autodetect conda (first `conda` on
+  `PATH`, then common locations like `%USERPROFILE%\Miniconda3`). Set it
+  explicitly if conda is **not** on your `PATH`, or you have multiple
+  installs and want a specific one. Example:
+  `C:\Users\you\Miniconda3`.
+- **`conda_env`** — leave blank for the `base` environment, or name the
+  env you created (e.g. `xgeoid`).
+
+The launcher fails with a clear message if conda can't be found, the named
+environment doesn't exist, or the environment is missing `netCDF4`/`numpy`
+(and tells you how to fix each). Once the runtime checks pass, it hands off
+to the Python tool, which handles all input/output and data-file issues
+itself.
+
+### Running without the launcher
+You can also run the Python script directly in any environment that has the
+dependencies:
+
+```
+conda activate xgeoid
+python xgeoid20b_batch_extract.py
+```
+
+In this case the `[runtime]` section is ignored (it is only used by
+`run.ps1`).
 
 
 ## Input File Format

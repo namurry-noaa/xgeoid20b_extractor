@@ -1,0 +1,21 @@
+# =============================================================================
+# xGEOID20B Batch Extraction Tool - conda environment definition
+# =============================================================================
+# Conda is the recommended package manager for this tool. netCDF4 and numpy
+# rely on compiled binary libraries (HDF5, netCDF-C), and conda resolves and
+# installs those binary dependencies far more reliably than pip.
+#
+# Create the environment:
+#     conda env create -f environment.yml
+#
+# Then either activate it:
+#     conda activate xgeoid
+# or set conda_env = xgeoid in config.ini and use run.ps1.
+# =============================================================================
+name: xgeoid
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - netCDF4>=1.6.0
+  - numpy>=1.23.0

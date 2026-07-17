@@ -31,7 +31,15 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.0.0
+# Version:                    2.1.0
+#
+# --- DEFAULT BEHAVIOR (out-of-the-box) ---
+# The tool runs NON-INTERACTIVELY by default:
+#   - Reads the single input CSV from the input/ folder.
+#   - Writes UTC-timestamped output + log files to the output/ folder.
+#   - OVERWRITES without asking (overwrite = always). Timestamps are to
+#     the minute, so runs normally produce distinct files.
+# All timestamps are UTC (GMT). Behavior is configurable in config.ini.
 # =============================================================================
 
 
@@ -40,14 +48,16 @@ import numpy as np
 import csv
 import os
 import sys
-from datetime import datetime
+import configparser
+from datetime import datetime, timezone
 
 
-__version__ = '2.0.0'
+__version__ = '2.1.0'
 
 
 # --- File Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILENAME = 'config.ini'
 
 # The xGEOID20 GGXF grid file (~403 MB) is NOT included in this repository.
 # It must be downloaded separately from NGS and placed in the GGXF/ folder:
@@ -55,14 +65,27 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 #
 # Resolution order (see resolve_ggxf_path):
 #   1. XGEOID20_GGXF environment variable (full path override)
-#   2. <script_dir>/GGXF/xGEOID20.ggxf   (default bundled location)
+#   2. config.ini [paths] ggxf_file (if set)
+#   3. <script_dir>/GGXF/xGEOID20.ggxf   (default bundled location)
 GGXF_DIR = os.path.join(SCRIPT_DIR, 'GGXF')
 GGXF_FILENAME = 'xGEOID20.ggxf'
 GGXF_ENV_VAR = 'XGEOID20_GGXF'
 GGXF_DOWNLOAD_URL = 'https://geodesy.noaa.gov/research/data/xGEOID20.ggxf'
 
 
-# --- Constants ---
+# --- Defaults (used when config.ini is absent or a value is blank) ---
+DEFAULTS = {
+    'ggxf_file': '',
+    'input_dir': 'input',
+    'output_dir': 'output',
+    'model': 'xGEOID20B',
+    'epoch': 2020.0,
+    't0': 2005.0,
+    'overwrite': 'always',
+}
+
+
+# --- Constants (populated from config in run_batch; defaults here) ---
 MODEL = 'xGEOID20B'
 EPOCH = 2020.0
 T0 = 2005.0
@@ -207,71 +230,203 @@ def point_in_grid(lat, lon360, meta):
     return (lat0 <= lat <= lat_max) and (lon0 <= lon360 <= lon_max)
 
 
-def check_file_overwrite(filepath):
+def load_config():
     """
-    Check if a file already exists and prompt user for overwrite confirmation.
+    Load configuration from config.ini, falling back to built-in defaults.
+
+    The config file is optional. Missing files, missing sections, missing
+    keys, or blank values all fall back to DEFAULTS. This keeps the tool
+    working out of the box.
+
+    Returns
+    -------
+    dict
+        Resolved configuration with keys: ggxf_file, input_dir, output_dir,
+        model, epoch (float), t0 (float), overwrite.
+    """
+    cfg = dict(DEFAULTS)
+    config_path = os.path.join(SCRIPT_DIR, CONFIG_FILENAME)
+
+    if os.path.isfile(config_path):
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(config_path, encoding='utf-8')
+        except configparser.Error as e:
+            print(f"WARNING: Could not parse {CONFIG_FILENAME}: {e}")
+            print(f"         Falling back to built-in defaults.")
+            return cfg
+
+        def get(section, key, default):
+            if parser.has_option(section, key):
+                val = parser.get(section, key).strip()
+                return val if val != '' else default
+            return default
+
+        cfg['ggxf_file'] = get('paths', 'ggxf_file', cfg['ggxf_file'])
+        cfg['input_dir'] = get('paths', 'input_dir', cfg['input_dir'])
+        cfg['output_dir'] = get('paths', 'output_dir', cfg['output_dir'])
+        cfg['model'] = get('model', 'model', cfg['model'])
+        cfg['overwrite'] = get('options', 'overwrite', cfg['overwrite']).lower()
+
+        # Numeric fields
+        for key, section in (('epoch', 'model'), ('t0', 'model')):
+            raw = get(section, key, None)
+            if raw is not None:
+                try:
+                    cfg[key] = float(raw)
+                except ValueError:
+                    print(f"WARNING: config {section}.{key} = '{raw}' is not "
+                          f"numeric; using default {DEFAULTS[key]}.")
+                    cfg[key] = DEFAULTS[key]
+
+    # Validate overwrite value
+    if cfg['overwrite'] not in ('always', 'never', 'prompt'):
+        print(f"WARNING: config options.overwrite = '{cfg['overwrite']}' is "
+              f"invalid; using 'always'.")
+        cfg['overwrite'] = 'always'
+
+    return cfg
+
+
+def resolve_dir(dir_value):
+    """Resolve a directory value: absolute as-is, else relative to SCRIPT_DIR."""
+    if os.path.isabs(dir_value):
+        return dir_value
+    return os.path.join(SCRIPT_DIR, dir_value)
+
+
+def check_file_overwrite(filepath, mode='always'):
+    """
+    Decide whether to (over)write a file according to the overwrite policy.
 
     Parameters
     ----------
     filepath : str
         Full path to the file to check.
+    mode : str
+        'always' - overwrite without asking (default, non-interactive).
+        'never'  - do not overwrite an existing file.
+        'prompt' - ask the user y/n (interactive terminals only).
 
     Returns
     -------
     bool
-        True if OK to proceed (file doesn't exist or user confirmed overwrite).
-        False if user chose not to overwrite.
+        True if OK to proceed (file doesn't exist, or overwrite allowed).
+        False if the existing file must not be overwritten.
     """
-    if os.path.exists(filepath):
-        print(f"\n  [!] File already exists: {os.path.basename(filepath)}")
-        while True:
-            response = input(f"      Overwrite? (y/n): ").strip().lower()
-            if response == 'y':
-                print(f"      Overwriting {os.path.basename(filepath)}...")
-                return True
-            elif response == 'n':
-                print(f"      Skipping - {os.path.basename(filepath)} "
-                      f"will not be overwritten.")
-                return False
-            else:
-                print("      Please enter 'y' or 'n'.")
-    return True
+    if not os.path.exists(filepath):
+        return True
+
+    name = os.path.basename(filepath)
+
+    if mode == 'always':
+        print(f"  [!] Overwriting existing file: {name}")
+        return True
+
+    if mode == 'never':
+        print(f"  [!] File exists, overwrite=never: {name} (skipping)")
+        return False
+
+    # mode == 'prompt' — but fall back to 'always' if stdin isn't interactive
+    if not sys.stdin or not sys.stdin.isatty():
+        print(f"  [!] File exists: {name} (non-interactive; overwriting)")
+        return True
+
+    print(f"\n  [!] File already exists: {name}")
+    while True:
+        response = input(f"      Overwrite? (y/n): ").strip().lower()
+        if response == 'y':
+            print(f"      Overwriting {name}...")
+            return True
+        elif response == 'n':
+            print(f"      Skipping - {name} will not be overwritten.")
+            return False
+        else:
+            print("      Please enter 'y' or 'n'.")
 
 
-def find_input_file():
-    """Find the first CSV file with 'input' in the name in script directory."""
-    for fname in os.listdir(SCRIPT_DIR):
-        if fname.lower().endswith('.csv') and 'input' in fname.lower():
-            return os.path.join(SCRIPT_DIR, fname)
-    return None
+def find_input_file(input_dir):
+    """
+    Find the single input CSV in input_dir (a file whose name contains
+    'input' and ends in .csv, case-insensitive).
+
+    Falls back to SCRIPT_DIR if input_dir does not exist (backward
+    compatibility with the pre-2.1 layout).
+
+    Returns
+    -------
+    tuple : (path_or_None, error_message_or_None)
+        path : full path to the single input file, or None.
+        error: a message if zero or multiple candidates were found.
+    """
+    search_dir = input_dir if os.path.isdir(input_dir) else SCRIPT_DIR
+
+    candidates = [
+        os.path.join(search_dir, f)
+        for f in sorted(os.listdir(search_dir))
+        if f.lower().endswith('.csv') and 'input' in f.lower()
+    ]
+
+    if not candidates:
+        return None, (
+            f"No input CSV found in: {search_dir}\n"
+            f"       A file whose name contains 'input' and ends in .csv "
+            f"is required."
+        )
+
+    if len(candidates) > 1:
+        listing = '\n'.join(f"         - {os.path.basename(c)}"
+                            for c in candidates)
+        return None, (
+            f"Multiple input CSV files found in: {search_dir}\n"
+            f"       Please keep only one:\n{listing}"
+        )
+
+    return candidates[0], None
 
 
-def generate_output_filename(input_path):
-    """Generate output CSV filename based on input filename."""
-    base = os.path.basename(input_path)
-    name = base.lower().replace('input', 'output')
-    return os.path.join(SCRIPT_DIR, name)
+def _timestamped_name(input_path, suffix, ext, run_utc):
+    """Build '<inputbase>_<suffix>_YYYYMMDDThhmmZ.<ext>' from input name."""
+    base = os.path.splitext(os.path.basename(input_path))[0].lower()
+    # Drop a trailing '_input' / 'input' token so we don't get 'input_output'
+    if base.endswith('_input'):
+        base = base[:-len('_input')]
+    elif base.endswith('input'):
+        base = base[:-len('input')].rstrip('_')
+    stamp = run_utc.strftime('%Y%m%dT%H%MZ')
+    return f"{base}_{suffix}_{stamp}.{ext}"
 
 
-def generate_log_filename(input_path):
-    """Generate log filename based on input filename."""
-    base = os.path.basename(input_path)
-    name = os.path.splitext(base)[0] + '_batch_log.txt'
-    return os.path.join(SCRIPT_DIR, name)
+def generate_output_filename(input_path, output_dir, run_utc):
+    """UTC-timestamped output CSV path in output_dir."""
+    return os.path.join(output_dir,
+                        _timestamped_name(input_path, 'output', 'csv', run_utc))
 
 
-def resolve_ggxf_path():
+def generate_log_filename(input_path, output_dir, run_utc):
+    """UTC-timestamped batch log path in output_dir."""
+    return os.path.join(output_dir,
+                        _timestamped_name(input_path, 'batch_log', 'txt', run_utc))
+
+
+def resolve_ggxf_path(config_ggxf_file=''):
     """
     Locate the xGEOID20 GGXF grid file.
 
     The ~403 MB GGXF file is NOT bundled with this tool. The user must
     download it from NGS and place it in the GGXF/ folder (or point the
-    XGEOID20_GGXF environment variable at it).
+    XGEOID20_GGXF environment variable / config.ini at it).
 
     Resolution order
     ----------------
     1. XGEOID20_GGXF environment variable, if set (full path override).
-    2. <script_dir>/GGXF/xGEOID20.ggxf (default bundled location).
+    2. config.ini [paths] ggxf_file, if set (passed in as config_ggxf_file).
+    3. <script_dir>/GGXF/xGEOID20.ggxf (default bundled location).
+
+    Parameters
+    ----------
+    config_ggxf_file : str
+        Value of [paths] ggxf_file from config.ini (may be blank).
 
     Returns
     -------
@@ -293,7 +448,18 @@ def resolve_ggxf_path():
             f"    {env_path}\n"
         )
 
-    # 2. Default bundled location
+    # 2. config.ini ggxf_file
+    if config_ggxf_file:
+        cfg_path = (config_ggxf_file if os.path.isabs(config_ggxf_file)
+                    else os.path.join(SCRIPT_DIR, config_ggxf_file))
+        if os.path.isfile(cfg_path):
+            return cfg_path
+        raise FileNotFoundError(
+            f"config.ini [paths] ggxf_file points to a file that does not "
+            f"exist:\n    {cfg_path}\n"
+        )
+
+    # 3. Default bundled location
     default_path = os.path.join(GGXF_DIR, GGXF_FILENAME)
     if os.path.isfile(default_path):
         return default_path
@@ -307,7 +473,7 @@ def resolve_ggxf_path():
         "  downloaded separately from NGS:\n"
         f"    {GGXF_DOWNLOAD_URL}\n\n"
         f"  Place it in the GGXF folder, or set the {GGXF_ENV_VAR} environment\n"
-        "  variable to its full path.\n"
+        "  variable / config.ini ggxf_file to its full path.\n"
     )
 
 
@@ -540,43 +706,59 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
 
 def run_batch():
     """Main batch processing function."""
+    global MODEL, EPOCH, T0
 
-    # --- Locate input file ---
-    input_path = find_input_file()
-    if not input_path:
-        print("ERROR: No input CSV file found in script directory.")
-        print(f"       Looking in: {SCRIPT_DIR}")
-        print("       File must contain 'input' in the filename.")
+    # --- Load configuration (config.ini, with fallback to defaults) ---
+    config = load_config()
+    MODEL = config['model']
+    EPOCH = config['epoch']
+    T0 = config['t0']
+    overwrite_mode = config['overwrite']
+    input_dir = resolve_dir(config['input_dir'])
+    output_dir = resolve_dir(config['output_dir'])
+
+    # --- Locate input file (single file in input_dir; error on multiple) ---
+    input_path, input_error = find_input_file(input_dir)
+    if input_error:
+        print(f"ERROR: {input_error}")
         sys.exit(1)
 
-    output_path = generate_output_filename(input_path)
-    log_path = generate_log_filename(input_path)
+    # --- Run timestamp (UTC / GMT) drives output + log filenames ---
+    run_start = datetime.now(timezone.utc)
 
-    # --- Check for existing output files ---
+    output_path = generate_output_filename(input_path, output_dir, run_start)
+    log_path = generate_log_filename(input_path, output_dir, run_start)
+
+    # --- Ensure output directory exists ---
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+    except OSError as e:
+        print(f"ERROR: Could not create output directory {output_dir}: {e}")
+        sys.exit(1)
+
+    # --- Banner ---
     print(f"\n{'='*60}")
     print(f"  xGEOID20B Batch Extraction  v{__version__}")
     print(f"{'='*60}")
 
-    if not check_file_overwrite(output_path):
-        print(f"\n  Output file will not be overwritten.")
-        print(f"  Please rename or move the existing output file and rerun.")
+    # --- Overwrite policy for the (rare) timestamp collision ---
+    if not check_file_overwrite(output_path, overwrite_mode):
+        print(f"\n  Output file will not be overwritten (overwrite=never).")
         print(f"  Exiting.\n")
         sys.exit(0)
 
-    if not check_file_overwrite(log_path):
-        print(f"\n  Log file will not be overwritten.")
-        print(f"  Please rename or move the existing log file and rerun.")
+    if not check_file_overwrite(log_path, overwrite_mode):
+        print(f"\n  Log file will not be overwritten (overwrite=never).")
         print(f"  Exiting.\n")
         sys.exit(0)
 
-    run_start = datetime.now()
-
-    print(f"  Input:   {os.path.basename(input_path)}")
-    print(f"  Output:  {os.path.basename(output_path)}")
-    print(f"  Log:     {os.path.basename(log_path)}")
-    print(f"  Model:   {MODEL}")
-    print(f"  Epoch:   {EPOCH}")
-    print(f"  Started: {run_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Input:    {os.path.basename(input_path)}")
+    print(f"  Output:   {os.path.basename(output_path)}")
+    print(f"  Log:      {os.path.basename(log_path)}")
+    print(f"  Model:    {MODEL}")
+    print(f"  Epoch:    {EPOCH}")
+    print(f"  Overwrite:{overwrite_mode}")
+    print(f"  Started:  {run_start.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
 
     # --- Read input CSV ---
@@ -613,7 +795,7 @@ def run_batch():
 
     # --- Locate the GGXF grid file (fail fast if missing) ---
     try:
-        ggxf_path = resolve_ggxf_path()
+        ggxf_path = resolve_ggxf_path(config['ggxf_file'])
     except FileNotFoundError as e:
         print(f"\nERROR: {e}")
         sys.exit(1)
@@ -746,7 +928,7 @@ def run_batch():
 
     ds.close()
 
-    run_end = datetime.now()
+    run_end = datetime.now(timezone.utc)
     duration = run_end - run_start
 
     # --- Console Summary ---
@@ -769,12 +951,13 @@ def run_batch():
         log_f.write('  xGEOID20B Batch Extraction Log\n')
         log_f.write('='*60 + '\n')
         log_f.write(f'  Version:         {__version__}\n')
-        log_f.write(f'  Run Date/Time:   {run_start.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        log_f.write(f'  Run Date/Time:   {run_start.strftime("%Y-%m-%d %H:%M:%S")} UTC\n')
         log_f.write(f'  Input File:      {os.path.basename(input_path)}\n')
         log_f.write(f'  Output File:     {os.path.basename(output_path)}\n')
         log_f.write(f'  Model:           {MODEL}\n')
         log_f.write(f'  Epoch:           {EPOCH}\n')
         log_f.write(f'  Reference T0:    {T0}\n')
+        log_f.write(f'  Overwrite Mode:  {overwrite_mode}\n')
         log_f.write(f'  GGXF File:       {ggxf_path}\n')
         log_f.write('='*60 + '\n')
         log_f.write(f'  Total Points:    {total}\n')
@@ -816,7 +999,7 @@ def run_batch():
             log_f.write('\n  No errors — all points processed successfully.\n')
 
         log_f.write('\n' + '='*60 + '\n')
-        log_f.write(f'  Log closed:  {run_end.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        log_f.write(f'  Log closed:  {run_end.strftime("%Y-%m-%d %H:%M:%S")} UTC\n')
         log_f.write('='*60 + '\n')
 
 

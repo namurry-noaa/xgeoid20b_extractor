@@ -9,6 +9,29 @@ The xGEOID20B model is a deprecated research-grade geoid model and is no longer
 available through NGS online tools.  However, this script provides legacy extraction capability against the xGEOID20 GGXF grid file, to which a link is provided below.
 
 
+## ⚠️ Default Behavior (read this first)
+
+This tool is designed to run **non-interactively, out of the box**:
+
+- It reads a **single** input CSV from the **`input/`** folder.
+- It writes results to the **`output/`** folder using **UTC (GMT)
+  timestamped** filenames, to the minute:
+  - `<inputbase>_output_YYYYMMDDThhmmZ.csv`
+  - `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`
+- **It OVERWRITES without asking** (`overwrite = always`). Because each
+  run's filenames carry the run's UTC timestamp, successive runs normally
+  produce **distinct** files and do not clobber earlier results. Two runs
+  in the *same clock minute* is the only collision case, and the
+  `overwrite` policy governs it.
+
+All timestamps are **UTC/GMT** by design (unambiguous; no daylight-saving
+shifts). This behavior is configurable in **`config.ini`** — see
+[Configuration](#configuration). If you need confirmation before
+overwriting, set `overwrite = prompt`; to never overwrite, set
+`overwrite = never`.
+
+
+
 ## Background
 The xGEOID20 model consists of two variants:
 - **xGEOID20A** — static geoid undulation without airborne gravity
@@ -130,8 +153,11 @@ pip install -r requirements.txt
 
 
 ## Input File Format
-The input file must be a standard ASCII CSV with the word input in the
-filename (e.g., AK_panhandle_input.csv).
+Place a single input CSV in the **`input/`** folder. The tool looks for a
+file whose name contains the word `input` and ends in `.csv`
+(e.g., `ak_panhandle_input.csv`). If more than one such file is present,
+the tool stops and lists them so you can remove the extras. See
+`input/README.txt`.
 
 Required columns:
 
@@ -144,9 +170,10 @@ BBBW71,55.09597375,131.2221351,-2.312
 
 
 ## Output Files
-The script generates two output files in the same directory as the script:
+Both output files are written to the **`output/`** folder with UTC
+timestamped names (see Default Behavior above):
 
-1.  Output CSV Filename: input filename with "input" replaced by "output" (e.g., AK_panhandle_output.csv)
+1.  Output CSV — `<inputbase>_output_YYYYMMDDThhmmZ.csv`
 Column Description:
 OPUS_PID -- NGS OPUS Permanent Identifier
 lat -- Latitude (decimal degrees, 8dp)
@@ -159,35 +186,64 @@ epoch -- Processing epoch
 undulation_N_epoch_corrected_m -- Epoch-corrected undulation N (m, 4dp)
 orthometric_H_epoch_corrected_m -- Epoch-corrected orthometric height H (m, 4dp)
 
-2.  Batch Log
-Filename: input filename with _batch_log.txt appended
-(e.g., AK_panhandle_input_batch_log.txt)
+2.  Batch Log — `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`
 
 Contains:
 
-Run timestamp and duration
+Run timestamp (UTC) and duration
 Input/output file names
 Total points processed, successful, and NaN/error counts
 Longitude convention warnings (if any)
+Grid edge warnings (if any)
 Per-point error detail (if any)
-Configuration
-The GGXF grid file location is resolved automatically (see the Data File
-section). The following constants at the top of the script may be adjusted
-as needed:
 
-MODEL     = 'xGEOID20B'                             # model variant
-EPOCH     = 2020.0                                  # processing epoch
-T0        = 2005.0                                  # model reference epoch
 
-To point the script at a GGXF file stored outside the GGXF/ folder, set the
-XGEOID20_GGXF environment variable rather than editing the script.
+## Configuration
+Behavior is controlled by **`config.ini`** in the script directory. The
+file is **optional** — if it is missing, or any value is blank, the tool
+falls back to the built-in defaults shown below, so it still works out of
+the box.
+
+```ini
+[paths]
+ggxf_file  =                 ; blank = use env var, then GGXF/xGEOID20.ggxf
+input_dir  = input
+output_dir = output
+
+[model]
+model = xGEOID20B
+epoch = 2020.0
+t0    = 2005.0
+
+[options]
+overwrite = always           ; always | never | prompt
+```
+
+Notes:
+- `input_dir` / `output_dir` may be relative (to the script directory) or
+  absolute.
+- `overwrite` governs the rare case that a timestamped output file already
+  exists (same-minute rerun): `always` overwrites silently (default),
+  `never` skips and exits, `prompt` asks (interactive terminals only; in a
+  non-interactive/piped run `prompt` behaves as `always`).
+
+### GGXF file resolution
+The GGXF grid file location is resolved in this order:
+1. the `XGEOID20_GGXF` environment variable, if set;
+2. `config.ini` `[paths] ggxf_file`, if set;
+3. `GGXF/xGEOID20.ggxf` in the script directory.
+
+Setting the environment variable or `ggxf_file` lets a shared/production
+copy point at a single grid file without editing the script. See the
+[Data File](#data-file) section and `GGXF/README.txt`.
 
 
 ## Sample Test
-Sample test files `ak_example_input.csv` and `ak_example_output.csv` are
-included in the repository to verify the script is working correctly. Run
-the script against the input file and confirm the expected values in the
-output file.
+Sample test files `input/ak_example_input.csv` and
+`output/ak_example_output.csv` are included in the repository to verify the
+tool is working correctly. Run the script; it reads the sample input and
+writes a UTC-timestamped output file to `output/`. Confirm the computed
+values match `output/ak_example_output.csv` (the reference sample).
 
 These values have been validated against the archived NGS xGEOID20B web tool
 output, which is considered the reference standard for this tool.

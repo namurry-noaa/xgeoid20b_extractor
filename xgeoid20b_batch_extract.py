@@ -31,7 +31,8 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# # =============================================================================
+# Version:                    2.0.0
+# =============================================================================
 
 
 import netCDF4 as nc
@@ -42,9 +43,23 @@ import sys
 from datetime import datetime
 
 
+__version__ = '2.0.0'
+
+
 # --- File Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-FILE_PATH = r"C:\Users\nathan.murry\NOAA\Geodesy\GEOID_Legacy\xGEOID20b\xGEOID20.ggxf"
+
+# The xGEOID20 GGXF grid file (~403 MB) is NOT included in this repository.
+# It must be downloaded separately from NGS and placed in the GGXF/ folder:
+#     https://geodesy.noaa.gov/research/data/xGEOID20.ggxf
+#
+# Resolution order (see resolve_ggxf_path):
+#   1. XGEOID20_GGXF environment variable (full path override)
+#   2. <script_dir>/GGXF/xGEOID20.ggxf   (default bundled location)
+GGXF_DIR = os.path.join(SCRIPT_DIR, 'GGXF')
+GGXF_FILENAME = 'xGEOID20.ggxf'
+GGXF_ENV_VAR = 'XGEOID20_GGXF'
+GGXF_DOWNLOAD_URL = 'https://geodesy.noaa.gov/research/data/xGEOID20.ggxf'
 
 
 # --- Constants ---
@@ -208,14 +223,14 @@ def check_file_overwrite(filepath):
         False if user chose not to overwrite.
     """
     if os.path.exists(filepath):
-        print(f"\n  ⚠️  File already exists: {os.path.basename(filepath)}")
+        print(f"\n  [!] File already exists: {os.path.basename(filepath)}")
         while True:
             response = input(f"      Overwrite? (y/n): ").strip().lower()
             if response == 'y':
                 print(f"      Overwriting {os.path.basename(filepath)}...")
                 return True
             elif response == 'n':
-                print(f"      Skipping — {os.path.basename(filepath)} "
+                print(f"      Skipping - {os.path.basename(filepath)} "
                       f"will not be overwritten.")
                 return False
             else:
@@ -245,9 +260,100 @@ def generate_log_filename(input_path):
     return os.path.join(SCRIPT_DIR, name)
 
 
+def resolve_ggxf_path():
+    """
+    Locate the xGEOID20 GGXF grid file.
+
+    The ~403 MB GGXF file is NOT bundled with this tool. The user must
+    download it from NGS and place it in the GGXF/ folder (or point the
+    XGEOID20_GGXF environment variable at it).
+
+    Resolution order
+    ----------------
+    1. XGEOID20_GGXF environment variable, if set (full path override).
+    2. <script_dir>/GGXF/xGEOID20.ggxf (default bundled location).
+
+    Returns
+    -------
+    str
+        Full path to an existing GGXF file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no GGXF file can be found, with guidance on how to obtain it.
+    """
+    # 1. Environment variable override
+    env_path = os.environ.get(GGXF_ENV_VAR)
+    if env_path:
+        if os.path.isfile(env_path):
+            return env_path
+        raise FileNotFoundError(
+            f"{GGXF_ENV_VAR} is set to a file that does not exist:\n"
+            f"    {env_path}\n"
+        )
+
+    # 2. Default bundled location
+    default_path = os.path.join(GGXF_DIR, GGXF_FILENAME)
+    if os.path.isfile(default_path):
+        return default_path
+
+    # Not found anywhere — fail fast with actionable guidance
+    raise FileNotFoundError(
+        "xGEOID20 GGXF grid file not found.\n\n"
+        "  Expected location:\n"
+        f"    {default_path}\n\n"
+        "  This ~403 MB file is NOT included in the repository and must be\n"
+        "  downloaded separately from NGS:\n"
+        f"    {GGXF_DOWNLOAD_URL}\n\n"
+        f"  Place it in the GGXF folder, or set the {GGXF_ENV_VAR} environment\n"
+        "  variable to its full path.\n"
+    )
+
+
 # =============================================================================
 # Bi-quadratic Interpolation
 # =============================================================================
+
+def safe_node_value(var, i, j):
+    """
+    Fetch a single grid node value as a float, guarding against
+    masked / fill / NaN entries.
+
+    netCDF4 returns MaskedArrays by default. If a node is masked
+    (a coverage gap or _FillValue) or NaN, using it in interpolation
+    would silently poison the result. The current xGEOID20 grids are
+    fully populated (no masked/fill nodes), but this guard makes the
+    tool fail loudly rather than silently if a future grid revision
+    introduces gaps.
+
+    Parameters
+    ----------
+    var : netCDF4.Variable
+        The open grid variable.
+    i, j : int
+        Node indices.
+
+    Returns
+    -------
+    float
+        The node value.
+
+    Raises
+    ------
+    ValueError
+        If the node is masked or NaN.
+    """
+    value = var[i, j]
+    if np.ma.is_masked(value):
+        raise ValueError(
+            f"Grid node ({i}, {j}) is masked (coverage gap / fill value)."
+        )
+    value = float(value)
+    if np.isnan(value):
+        raise ValueError(f"Grid node ({i}, {j}) is NaN.")
+    return value
+
 
 def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
     """
@@ -275,7 +381,8 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
     -----
     Biquadratic interpolation fits a 2nd-order polynomial surface through
     a 3x3 neighborhood of grid nodes. The stencil center is chosen as the
-    nearest node, with local coordinates (s, t) normalized to [-1, 1].
+    nearest node, with local coordinates (s, t) measured in grid-cell units
+    relative to that center (roughly the range [-1, 1] for interior points).
 
     Basis functions are 1D quadratic Lagrange polynomials:
         L0(x) = x*(x-1)/2   (left/bottom node)
@@ -284,6 +391,11 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
 
     The 2D surface is the tensor product:
         f(s,t) = sum_m sum_n L_m(s) * L_n(t) * f_mn
+
+    If a query point lies within half a cell of a grid edge, the stencil
+    center is clamped inward so a full 3x3 neighborhood exists. The result
+    is then a (mild) extrapolation. Callers may inspect the returned
+    `edge_clamped` flag to warn about such points.
     """
 
     # --- Choose stencil center (nearest node) ---
@@ -291,10 +403,13 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
     j_center = int(round(j_frac))
 
     # Clamp center so full 3x3 stencil fits within grid
-    i_center = max(1, min(i_center, nrows - 2))
-    j_center = max(1, min(j_center, ncols - 2))
+    i_clamped = max(1, min(i_center, nrows - 2))
+    j_clamped = max(1, min(j_center, ncols - 2))
+    edge_clamped = (i_clamped != i_center) or (j_clamped != j_center)
+    i_center = i_clamped
+    j_center = j_clamped
 
-    # --- Local normalized coordinates in [-1, 1] ---
+    # --- Local normalized coordinates (grid-cell units) ---
     s = i_frac - i_center
     t = j_frac - j_center
 
@@ -317,7 +432,7 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
     # --- Tensor product interpolation ---
     result = float(Ls @ F @ Lt)
 
-    return result
+    return result, edge_clamped
 
 
 # =============================================================================
@@ -375,10 +490,12 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
     var = grp.variables[var_name]
 
     def grid_data(i, j):
-        return float(var[i, j])
+        return safe_node_value(var, i, j)
 
     # --- Static interpolation ---
-    undulation_N = biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols)
+    undulation_N, edge_clamped = biquadratic_interp(
+        grid_data, i_frac, j_frac, nrows, ncols
+    )
 
     # --- Velocity correction ---
     vel_candidates = []
@@ -398,9 +515,9 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
         vel_j_frac = (lon360 - vel_meta['lon0']) / vel_meta['dlon']
 
         def vel_grid_data(i, j):
-            return float(vel_var[i, j])
+            return safe_node_value(vel_var, i, j)
 
-        velocity = biquadratic_interp(
+        velocity, _ = biquadratic_interp(
             vel_grid_data, vel_i_frac, vel_j_frac,
             vel_meta['nrows'], vel_meta['ncols']
         )
@@ -413,6 +530,7 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
         'undulation_N_corrected': undulation_N_corrected,
         'lon360': lon360,
         'lon_warning': lon_warning,
+        'edge_clamped': edge_clamped,
     }
 
 
@@ -436,7 +554,7 @@ def run_batch():
 
     # --- Check for existing output files ---
     print(f"\n{'='*60}")
-    print(f"  xGEOID20B Batch Extraction")
+    print(f"  xGEOID20B Batch Extraction  v{__version__}")
     print(f"{'='*60}")
 
     if not check_file_overwrite(output_path):
@@ -463,11 +581,27 @@ def run_batch():
 
     # --- Read input CSV ---
     try:
-        with open(input_path, 'r') as f:
+        with open(input_path, 'r', encoding='utf-8-sig', newline='') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
+            input_columns = reader.fieldnames or []
     except Exception as e:
         print(f"ERROR reading input file: {e}")
+        sys.exit(1)
+
+    # --- Validate required columns are present ---
+    required_columns = ['OPUS_PID', 'lat', 'lon', 'ellip_h_m']
+    missing_columns = [c for c in required_columns if c not in input_columns]
+    if missing_columns:
+        print(f"ERROR: Input CSV is missing required column(s): "
+              f"{', '.join(missing_columns)}")
+        print(f"       Required columns: {', '.join(required_columns)}")
+        print(f"       Found columns:    "
+              f"{', '.join(input_columns) if input_columns else '(none)'}")
+        sys.exit(1)
+
+    if not rows:
+        print(f"ERROR: Input CSV contains no data rows.")
         sys.exit(1)
 
     total = len(rows)
@@ -475,11 +609,20 @@ def run_batch():
     nan_count = 0
     errors = []
     lon_warnings = []
+    edge_warnings = []
+
+    # --- Locate the GGXF grid file (fail fast if missing) ---
+    try:
+        ggxf_path = resolve_ggxf_path()
+    except FileNotFoundError as e:
+        print(f"\nERROR: {e}")
+        sys.exit(1)
 
     # --- Open GGXF file ---
     print(f"  Opening GGXF file...")
+    print(f"    {ggxf_path}")
     try:
-        ds = nc.Dataset(FILE_PATH, 'r')
+        ds = nc.Dataset(ggxf_path, 'r')
         load_grid_metadata(ds)
         print(f"  GGXF file opened successfully.\n")
     except Exception as e:
@@ -501,7 +644,7 @@ def run_batch():
     ]
 
     # --- Process rows ---
-    with open(output_path, 'w', newline='') as out_f:
+    with open(output_path, 'w', newline='', encoding='utf-8') as out_f:
         writer = csv.DictWriter(out_f, fieldnames=output_fieldnames)
         writer.writeheader()
 
@@ -520,7 +663,7 @@ def run_batch():
                 # Capture any longitude convention warning
                 if result and result['lon_warning'] is not None:
                     lon_warnings.append((pid, result['lon_warning']))
-                    print(f'\n  ⚠️  Longitude warning for {pid} — see log file')
+                    print(f'\n  [!] Longitude warning for {pid} - see log file')
 
                 if result is None:
                     # Point outside all grids
@@ -547,6 +690,11 @@ def run_batch():
                     H = ellip_h - N
                     H_corr = ellip_h - N_corr if N_corr is not None else None
 
+                    # Note points whose interpolation stencil was clamped
+                    # at a grid edge (result is a mild extrapolation).
+                    if result.get('edge_clamped'):
+                        edge_warnings.append((pid, result['region']))
+
                     writer.writerow({
                         'OPUS_PID': pid,
                         'lat': f"{lat:.8f}",
@@ -560,7 +708,7 @@ def run_batch():
                         'orthometric_H_epoch_corrected_m': f"{H_corr:.4f}" if H_corr is not None else 'NaN',
                     })
                     successful += 1
-                    print('✓')
+                    print('OK')
 
             except Exception as e:
                 # Unexpected error on this row
@@ -608,23 +756,26 @@ def run_batch():
     print(f"  Total Points:    {total}")
     print(f"  Successful:      {successful}")
     print(f"  NaN / Errors:    {nan_count}")
+    if edge_warnings:
+        print(f"  Edge-clamped:    {len(edge_warnings)} (see log file)")
     print(f"  Duration:        {duration}")
     print(f"  Output file:     {os.path.basename(output_path)}")
     print(f"  Log file:        {os.path.basename(log_path)}")
     print(f"{'='*60}\n")
 
     # --- Write Log File ---
-    with open(log_path, 'w') as log_f:
+    with open(log_path, 'w', encoding='utf-8') as log_f:
         log_f.write('='*60 + '\n')
         log_f.write('  xGEOID20B Batch Extraction Log\n')
         log_f.write('='*60 + '\n')
+        log_f.write(f'  Version:         {__version__}\n')
         log_f.write(f'  Run Date/Time:   {run_start.strftime("%Y-%m-%d %H:%M:%S")}\n')
         log_f.write(f'  Input File:      {os.path.basename(input_path)}\n')
         log_f.write(f'  Output File:     {os.path.basename(output_path)}\n')
         log_f.write(f'  Model:           {MODEL}\n')
         log_f.write(f'  Epoch:           {EPOCH}\n')
         log_f.write(f'  Reference T0:    {T0}\n')
-        log_f.write(f'  GGXF File:       {FILE_PATH}\n')
+        log_f.write(f'  GGXF File:       {ggxf_path}\n')
         log_f.write('='*60 + '\n')
         log_f.write(f'  Total Points:    {total}\n')
         log_f.write(f'  Successful:      {successful}\n')
@@ -642,6 +793,18 @@ def run_batch():
                 log_f.write('  ' + '-'*40 + '\n')
         else:
             log_f.write('\n  Longitude convention: All inputs positive-west (NGS). OK.\n')
+
+        if edge_warnings:
+            log_f.write('\n  --- Grid Edge Warnings ---\n\n')
+            log_f.write('  The following points are within half a grid cell of a\n')
+            log_f.write('  grid edge. The 3x3 interpolation stencil was clamped\n')
+            log_f.write('  inward, so the result is a mild extrapolation rather\n')
+            log_f.write('  than a true interpolation. Verify these results:\n\n')
+            for pid, region in edge_warnings:
+                log_f.write(f'  OPUS_PID: {pid}  (region: {region})\n')
+            log_f.write('  ' + '-'*40 + '\n')
+        else:
+            log_f.write('\n  Grid edges: No points required edge clamping. OK.\n')
 
         if errors:
             log_f.write('\n  --- NaN / Error Detail ---\n\n')

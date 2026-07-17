@@ -6,7 +6,7 @@ This tool extracts geoid undulation values (N) from the NGS experimental
 xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoid height (h).
 
 The xGEOID20B model is a deprecated research-grade geoid model and is no longer 
-available through NGS online tools.  However, this script provides legacy extraction capability against the against the xGEOID20 GGXF grid file, to which a link is provided below.
+available through NGS online tools.  However, this script provides legacy extraction capability against the xGEOID20 GGXF grid file, to which a link is provided below.
 
 
 ## Background
@@ -79,8 +79,8 @@ N(t) = N + velocity * (t - T0)
 
 ## Data File
 The xGEOID20B GGXF grid file is **not included** in this repository.
-It must be obtained separately from the NGS internal data server and
-placed in the location specified by the `FILE_PATH` constant in the script.
+It must be obtained separately from NGS and placed in the `GGXF/` folder
+included with this tool.
 
 
 ### Obtaining the GGXF File:
@@ -92,18 +92,32 @@ https://geodesy.noaa.gov/research/data/xGEOID20.ggxf
 | Property | Value |
 |---|---|
 | Filename | `xGEOID20.ggxf` |
-| Size | ~413 MB |
+| Size | ~403 MB |
 | Format | GGXF (HDF5/NetCDF4) |
 | Source | NOAA National Geodetic Survey |
 | Model | xGEOID20 B variant (with airborne gravity) |
-| Internal URL | https://geodesy.noaa.gov/research/data/xGEOID20.ggxf |
+| Download URL | https://geodesy.noaa.gov/research/data/xGEOID20.ggxf |
 
 
 ### After Downloading:
-Update the `FILE_PATH` constant at the top of `xgeoid20b_batch.py` to
-point to your local copy of the file:
+Place the downloaded `xGEOID20.ggxf` directly into the `GGXF/` folder so
+that the final path is:
 
-FILE_PATH = r"C:\your\local\path\xGEOID20.ggxf"
+    GGXF/xGEOID20.ggxf
+
+The script locates the grid file automatically in this order:
+
+1. The `XGEOID20_GGXF` environment variable, if set — point this at the
+   full path of an `xGEOID20.ggxf` stored elsewhere (e.g. a shared or
+   production copy). Example (PowerShell):
+
+       $env:XGEOID20_GGXF = "C:\path\to\xGEOID20.ggxf"
+
+2. Otherwise, `GGXF/xGEOID20.ggxf` in the script directory.
+
+If neither is found, the script exits with an error explaining how to
+obtain the file. See `GGXF/README.txt` for details. The `.gitignore` is
+configured so the downloaded `*.ggxf` file is never committed.
 
 
 ## Requirements
@@ -157,16 +171,23 @@ Total points processed, successful, and NaN/error counts
 Longitude convention warnings (if any)
 Per-point error detail (if any)
 Configuration
-The following constants at the top of the script may be adjusted as needed:
+The GGXF grid file location is resolved automatically (see the Data File
+section). The following constants at the top of the script may be adjusted
+as needed:
 
-FILE_PATH = r"C:\your\local\path\xGEOID20.ggxf"   # path to GGXF file
 MODEL     = 'xGEOID20B'                             # model variant
 EPOCH     = 2020.0                                  # processing epoch
 T0        = 2005.0                                  # model reference epoch
 
+To point the script at a GGXF file stored outside the GGXF/ folder, set the
+XGEOID20_GGXF environment variable rather than editing the script.
+
 
 ## Sample Test
-A sample test file AK_Example_INput.csv and AK_Example_Output.csv are included in the repository to verify the script is working correctly.  Run the script against the input file, and confirm the expected output in teh output file.
+Sample test files `ak_example_input.csv` and `ak_example_output.csv` are
+included in the repository to verify the script is working correctly. Run
+the script against the input file and confirm the expected values in the
+output file.
 
 These values have been validated against the archived NGS xGEOID20B web tool
 output, which is considered the reference standard for this tool.
@@ -183,4 +204,4 @@ See LICENSE for terms of use.
 
 ## Notes
 The xGEOID20B GGXF file is not included in this repository and must
-be obtained via the link abiove, (see the Data File section).  This tool is for research use and not intended for use in any production environment.  The xGEOID20 model is research-grade and considered deprecated.  Results should be used in accordance with the notes above.
+be obtained via the link above, (see the Data File section).  This tool is for research use and not intended for use in any production environment.  The xGEOID20 model is research-grade and considered deprecated.  Results should be used in accordance with the notes above.

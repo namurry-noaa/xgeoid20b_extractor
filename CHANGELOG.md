@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.1] - 2026-07-21
+
+### Changed
+- Input CSV header matching is now **case-insensitive** and tolerant of
+  surrounding whitespace, and **column order no longer matters** (columns
+  are matched by name, not position). Extra columns are ignored. The four
+  required columns (`OPUS_PID`, `lat`, `lon`, `ellip_h_m`) must still all be
+  present. `OPUS_PID` values are used exactly as written.
+- README and `input/README.txt` clarified to document the input header
+  rules explicitly.
+
+### Backward compatibility
+- Non-breaking (PATCH). Existing well-formed input files behave exactly as
+  before; the change only makes header parsing more forgiving.
+
 ## [2.4.0] - 2026-07-21
 
 ### Added

@@ -42,7 +42,7 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.4.0
+# Version:                    2.4.1
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -67,7 +67,7 @@ import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '2.4.0'
+__version__ = '2.4.1'
 
 
 # --- File Paths ---
@@ -1097,24 +1097,47 @@ def run_batch():
     print(f"{'='*60}\n")
 
     # --- Read input CSV ---
+    # Required columns: OPUS_PID, lat, lon, ellip_h_m. Header matching is
+    # CASE-INSENSITIVE and tolerant of surrounding whitespace, and column
+    # ORDER does not matter. Each header is normalized (trimmed + lowercased)
+    # and mapped to its canonical name; extra columns are ignored. Data
+    # values (e.g. the OPUS_PID station labels) are left exactly as-is.
+    canonical_columns = ['OPUS_PID', 'lat', 'lon', 'ellip_h_m']
+    canon_by_lower = {c.lower(): c for c in canonical_columns}
     try:
         with open(input_path, 'r', encoding='utf-8-sig', newline='') as f:
             reader = csv.DictReader(f)
-            rows = list(reader)
-            input_columns = reader.fieldnames or []
+            raw_fieldnames = reader.fieldnames or []
+            # Build: normalized-header -> canonical name (only for recognized cols)
+            header_map = {}
+            for h in raw_fieldnames:
+                if h is None:
+                    continue
+                key = h.strip().lower()
+                if key in canon_by_lower:
+                    header_map[h] = canon_by_lower[key]
+            # Re-key each row to canonical names (keep unrecognized cols out).
+            rows = []
+            for raw in reader:
+                row = {}
+                for orig, val in raw.items():
+                    if orig in header_map:
+                        row[header_map[orig]] = val
+                rows.append(row)
     except Exception as e:
         print(f"ERROR reading input file: {e}")
         sys.exit(1)
 
-    # --- Validate required columns are present ---
-    required_columns = ['OPUS_PID', 'lat', 'lon', 'ellip_h_m']
-    missing_columns = [c for c in required_columns if c not in input_columns]
+    # --- Validate required columns are present (case-insensitive) ---
+    found_canon = set(header_map.values())
+    missing_columns = [c for c in canonical_columns if c not in found_canon]
     if missing_columns:
         print(f"ERROR: Input CSV is missing required column(s): "
               f"{', '.join(missing_columns)}")
-        print(f"       Required columns: {', '.join(required_columns)}")
+        print(f"       Required columns (case-insensitive, any order): "
+              f"{', '.join(canonical_columns)}")
         print(f"       Found columns:    "
-              f"{', '.join(input_columns) if input_columns else '(none)'}")
+              f"{', '.join(h for h in raw_fieldnames if h) if raw_fieldnames else '(none)'}")
         sys.exit(1)
 
     if not rows:

@@ -23,6 +23,9 @@ GGXF/*
 !GGXF/
 !GGXF/README.txt
 
+# HTDP: the htdp360.exe (~3 MB) and its README ARE committed with the
+# project (small, released NGS software) — do not ignore them.
+
 # Input/output CSVs — commented out to allow sample test file tracking
 # *_input.csv
 # *_output.csv

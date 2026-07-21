@@ -4,7 +4,18 @@
 # Interpolation: Biquadratic (3x3 stencil)
 #
 # --- COORDINATE INPUT REQUIREMENTS ---
-# Horizontal Reference Frame: IGS14
+# *** HORIZONTAL REFERENCE FRAME (INPUT) - USER'S RESPONSIBILITY ***
+# Input horizontal coordinates MUST be in the correct NAD83(2011) realization
+# for their region. The tool does NOT verify or convert the input frame;
+# supplying the wrong frame yields silently incorrect results.
+#     CONUS (incl. SE Alaska) -> NAD83(2011/CORS96/2007)  [input_frame 2011]
+#     Pacific                 -> NAD83(PA11/PACP00)        [input_frame PA11]
+#     Marianas                -> NAD83(MA11/MARP00)        [input_frame MA11]
+# The tool transforms these to ITRF2014 / IGS14 (via bundled NGS HTDP) and
+# appends the transformed lat/lon/eht as output columns. The geoid math
+# always uses the INPUT coordinates and is unaffected by the transform.
+# Set the realization in config.ini [transform] input_frame.
+#
 # Ellipsoid:                  GRS80
 # Latitude/Longitude:         Decimal degrees
 # Ellipsoidal Height:         Meters
@@ -49,10 +60,13 @@ import csv
 import os
 import sys
 import configparser
+import subprocess
+import tempfile
+import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '2.2.0'
+__version__ = '2.3.0'
 
 
 # --- File Paths ---
@@ -73,6 +87,23 @@ GGXF_ENV_VAR = 'XGEOID20_GGXF'
 GGXF_DOWNLOAD_URL = 'https://geodesy.noaa.gov/research/data/xGEOID20.ggxf'
 
 
+# --- HTDP horizontal transform ---
+# The bundled NGS HTDP utility performs the NAD83 realization -> IGS14
+# transform. It is driven via stdlib subprocess (no third-party deps).
+HTDP_DIR = os.path.join(SCRIPT_DIR, 'HTDP')
+HTDP_FILENAME = 'htdp360.exe'
+
+# HTDP input reference-frame menu codes for the supported NAD83 realizations.
+HTDP_INPUT_FRAME_CODES = {
+    '2011': '1',   # NAD83(2011/CORS96/2007)  - CONUS
+    'PA11': '2',   # NAD83(PA11/PACP00)        - Pacific
+    'MA11': '3',   # NAD83(MA11/MARP00)        - Marianas
+}
+# Output frame is fixed to ITRF2014 / IGS14.
+HTDP_OUTPUT_FRAME_CODE = '25'   # ITRF2014 / IGS14 / IGb14
+HTDP_OUTPUT_FRAME_NAME = 'ITRF2014/IGS14'
+
+
 # --- Defaults (used when config.ini is absent or a value is blank) ---
 DEFAULTS = {
     'ggxf_file': '',
@@ -82,6 +113,11 @@ DEFAULTS = {
     'epoch': 2020.0,
     't0': 2005.0,
     'overwrite': 'always',
+    'transform_enabled': True,
+    'input_frame': '2011',
+    'input_epoch': '2010.0',
+    'output_epoch': '2010.0',
+    'htdp_exe': '',
 }
 
 
@@ -268,6 +304,15 @@ def load_config():
         cfg['model'] = get('model', 'model', cfg['model'])
         cfg['overwrite'] = get('options', 'overwrite', cfg['overwrite']).lower()
 
+        # Transform section
+        enabled_raw = get('transform', 'enabled', None)
+        if enabled_raw is not None:
+            cfg['transform_enabled'] = enabled_raw.strip().lower() in ('true', '1', 'yes', 'on')
+        cfg['input_frame'] = get('transform', 'input_frame', cfg['input_frame'])
+        cfg['input_epoch'] = get('transform', 'input_epoch', cfg['input_epoch'])
+        cfg['output_epoch'] = get('transform', 'output_epoch', cfg['output_epoch'])
+        cfg['htdp_exe'] = get('transform', 'htdp_exe', cfg['htdp_exe'])
+
         # Numeric fields
         for key, section in (('epoch', 'model'), ('t0', 'model')):
             raw = get(section, key, None)
@@ -284,6 +329,15 @@ def load_config():
         print(f"WARNING: config options.overwrite = '{cfg['overwrite']}' is "
               f"invalid; using 'always'.")
         cfg['overwrite'] = 'always'
+
+    # Validate input_frame
+    frame_key = str(cfg['input_frame']).strip().upper()
+    if frame_key not in HTDP_INPUT_FRAME_CODES:
+        print(f"WARNING: config transform.input_frame = '{cfg['input_frame']}' "
+              f"is invalid; expected one of {', '.join(HTDP_INPUT_FRAME_CODES)}. "
+              f"Using default '{DEFAULTS['input_frame']}'.")
+        frame_key = DEFAULTS['input_frame']
+    cfg['input_frame'] = frame_key
 
     return cfg
 
@@ -475,6 +529,182 @@ def resolve_ggxf_path(config_ggxf_file=''):
         f"  Place it in the GGXF folder, or set the {GGXF_ENV_VAR} environment\n"
         "  variable / config.ini ggxf_file to its full path.\n"
     )
+
+
+# =============================================================================
+# Horizontal Coordinate Transform (HTDP -> IGS14)
+# =============================================================================
+
+def resolve_htdp_path(config_htdp_exe=''):
+    """
+    Locate the HTDP executable.
+
+    Order:
+      1. config.ini [transform] htdp_exe, if set.
+      2. bundled HTDP/htdp360.exe in the script directory.
+
+    Returns
+    -------
+    str
+        Full path to an existing HTDP executable.
+
+    Raises
+    ------
+    FileNotFoundError
+        If HTDP cannot be found.
+    """
+    if config_htdp_exe:
+        p = (config_htdp_exe if os.path.isabs(config_htdp_exe)
+             else os.path.join(SCRIPT_DIR, config_htdp_exe))
+        if os.path.isfile(p):
+            return p
+        raise FileNotFoundError(
+            f"config.ini [transform] htdp_exe points to a file that does not "
+            f"exist:\n    {p}\n"
+        )
+
+    bundled = os.path.join(HTDP_DIR, HTDP_FILENAME)
+    if os.path.isfile(bundled):
+        return bundled
+
+    raise FileNotFoundError(
+        "HTDP executable not found.\n\n"
+        "  Expected bundled location:\n"
+        f"    {bundled}\n\n"
+        "  Restore HTDP/htdp360.exe, or set htdp_exe in config.ini "
+        "[transform].\n"
+    )
+
+
+def _epoch_htdp_answers(epoch_value):
+    """
+    Build the HTDP menu answers for a reference epoch.
+
+    HTDP asks "How do you wish to enter the time?" then:
+      option 1 -> month-day-year (free format)
+      option 2 -> decimal year
+
+    Accepts either a decimal year ("2010.0") or a calendar date
+    ("1 1 2010" or "1/1/2010"). Returns the list of lines to send.
+    """
+    s = str(epoch_value).strip()
+    # Calendar if it contains a separator implying M D Y (space or slash with
+    # 3 parts); otherwise treat as decimal year.
+    parts = s.replace('/', ' ').split()
+    if len(parts) == 3:
+        # calendar date -> option 1, then "M D Y"
+        return ['1', ' '.join(parts)]
+    # decimal year -> option 2, then the value
+    return ['2', s]
+
+
+def htdp_transform_file(htdp_exe, records, input_frame_key,
+                        input_epoch, output_epoch):
+    """
+    Transform a batch of horizontal positions to ITRF2014/IGS14 using HTDP.
+
+    Drives the HTDP interactive CLI via stdlib subprocess (piped stdin).
+    No third-party dependencies. Windows-only (HTDP is a Windows exe).
+
+    Parameters
+    ----------
+    htdp_exe : str
+        Path to htdp360.exe.
+    records : list of tuple
+        (lat, lon, eht, label) per point. lat/lon in decimal degrees using
+        the NGS positive-west convention as supplied by the user; eht in
+        meters. label is a short identifier (<=24 chars).
+    input_frame_key : str
+        One of '2011', 'PA11', 'MA11'.
+    input_epoch, output_epoch : str
+        Decimal year or calendar date (see _epoch_htdp_answers).
+
+    Returns
+    -------
+    list of tuple
+        (lat_igs14, lon_igs14, eht_igs14) per input record, in the same
+        order. Values are floats.
+
+    Raises
+    ------
+    RuntimeError
+        If HTDP fails or the output cannot be parsed.
+    """
+    in_frame_code = HTDP_INPUT_FRAME_CODES[input_frame_key]
+
+    workdir = tempfile.mkdtemp(prefix='xgeoid_htdp_')
+    in_file = os.path.join(workdir, 'htdp_in.txt')
+    out_file = os.path.join(workdir, 'htdp_out.txt')
+
+    try:
+        # Write the delimited input file: lat,lon,eht,label
+        with open(in_file, 'w', encoding='ascii') as f:
+            for (lat, lon, eht, label) in records:
+                safe_label = str(label)[:24]
+                f.write(f"{lat},{lon},{eht},{safe_label}\n")
+
+        # Build the keystroke sequence (mirrors the HTDP menu flow).
+        answers = ['4', out_file, in_frame_code, HTDP_OUTPUT_FRAME_CODE]
+        answers += _epoch_htdp_answers(input_epoch)
+        answers += _epoch_htdp_answers(output_epoch)
+        answers += ['3', in_file, '0', '']
+        keystrokes = '\n'.join(answers)
+
+        proc = subprocess.run(
+            [htdp_exe],
+            input=keystrokes,
+            text=True,
+            capture_output=True,
+            cwd=workdir,
+            timeout=300,
+        )
+
+        if not os.path.isfile(out_file):
+            raise RuntimeError(
+                f"HTDP produced no output file.\n"
+                f"  returncode={proc.returncode}\n"
+                f"  stderr tail: {proc.stderr[-300:]}"
+            )
+
+        results = _parse_htdp_output(out_file)
+        if len(results) != len(records):
+            raise RuntimeError(
+                f"HTDP returned {len(results)} positions for "
+                f"{len(records)} inputs (count mismatch)."
+            )
+        return results
+
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _parse_htdp_output(out_file):
+    """
+    Parse an HTDP transform output file.
+
+    The data lines have the form:
+        <lat>  <lon>  <eht>  <label>
+    preceded by a header/caution block. Data lines are those whose first
+    two whitespace-separated tokens parse as floats.
+
+    Returns
+    -------
+    list of tuple (lat, lon, eht) floats, in file order.
+    """
+    results = []
+    with open(out_file, 'r', encoding='ascii', errors='replace') as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            try:
+                lat = float(parts[0])
+                lon = float(parts[1])
+                eht = float(parts[2])
+            except ValueError:
+                continue  # header / caution / blank line
+            results.append((lat, lon, eht))
+    return results
 
 
 # =============================================================================
@@ -758,6 +988,11 @@ def run_batch():
     print(f"  Model:    {MODEL}")
     print(f"  Epoch:    {EPOCH}")
     print(f"  Overwrite:{overwrite_mode}")
+    if config['transform_enabled']:
+        print(f"  Transform:{config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME} "
+              f"(epochs {config['input_epoch']} -> {config['output_epoch']})")
+    else:
+        print(f"  Transform:disabled")
     print(f"  Started:  {run_start.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
 
@@ -811,6 +1046,54 @@ def run_batch():
         print(f"ERROR opening GGXF file: {e}")
         sys.exit(1)
 
+    # --- Horizontal transform (NAD83 realization -> IGS14) via HTDP ---
+    # Computed up front as a batch (one HTDP invocation for all points).
+    # Keyed by row index so results line up with the output rows. If the
+    # transform is disabled or fails, IGS14 columns are left blank and a
+    # note is logged; the geoid computation is unaffected.
+    igs14_by_idx = {}
+    transform_note = None
+    htdp_path = None
+    if config['transform_enabled']:
+        try:
+            htdp_path = resolve_htdp_path(config['htdp_exe'])
+        except FileNotFoundError as e:
+            transform_note = f"Transform skipped: {e}"
+            print(f"  [!] {transform_note}")
+
+        if htdp_path:
+            # Build records from rows that have parseable coordinates.
+            recs = []
+            rec_idx = []
+            for idx, row in enumerate(rows, start=1):
+                try:
+                    lat = float(row['lat'])
+                    lon = float(row['lon'])
+                    eht = float(row['ellip_h_m'])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                pid = (row.get('OPUS_PID') or f'ROW_{idx}').strip()
+                recs.append((lat, lon, eht, f"IDX{idx}"))
+                rec_idx.append(idx)
+
+            if recs:
+                print(f"  Running HTDP transform "
+                      f"({config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME}) "
+                      f"on {len(recs)} points...")
+                try:
+                    out = htdp_transform_file(
+                        htdp_path, recs, config['input_frame'],
+                        config['input_epoch'], config['output_epoch'],
+                    )
+                    for k, idx in enumerate(rec_idx):
+                        igs14_by_idx[idx] = out[k]
+                    print(f"  HTDP transform complete.\n")
+                except Exception as e:
+                    transform_note = f"Transform failed: {e}"
+                    print(f"  [!] {transform_note}\n")
+    else:
+        transform_note = "Transform disabled in config."
+
     # --- Output CSV setup ---
     output_fieldnames = [
         'OPUS_PID',
@@ -823,6 +1106,11 @@ def run_batch():
         'epoch',
         'undulation_N_epoch_corrected_m',
         'orthometric_H_epoch_corrected_m',
+        'input_frame',
+        'lat_igs14',
+        'lon_igs14',
+        'eht_igs14_m',
+        'coord_out_epoch',
     ]
 
     # --- Process rows ---
@@ -834,6 +1122,26 @@ def run_batch():
             pid = row.get('OPUS_PID', f'ROW_{idx}').strip()
 
             print(f"  Processing {pid:<12} ({idx} of {total})...", end=' ')
+
+            # IGS14 transform columns for this row (blank if unavailable).
+            def _igs14_cols():
+                vals = igs14_by_idx.get(idx)
+                if vals is None:
+                    return {
+                        'input_frame': config['input_frame'] if config['transform_enabled'] else '',
+                        'lat_igs14': '',
+                        'lon_igs14': '',
+                        'eht_igs14_m': '',
+                        'coord_out_epoch': config['output_epoch'] if config['transform_enabled'] else '',
+                    }
+                lat_i, lon_i, eht_i = vals
+                return {
+                    'input_frame': config['input_frame'],
+                    'lat_igs14': f"{lat_i:.8f}",
+                    'lon_igs14': f"{lon_i:.8f}",
+                    'eht_igs14_m': f"{eht_i:.4f}",
+                    'coord_out_epoch': config['output_epoch'],
+                }
 
             try:
                 lat = float(row['lat'])
@@ -860,6 +1168,7 @@ def run_batch():
                         'epoch': EPOCH,
                         'undulation_N_epoch_corrected_m': 'NaN',
                         'orthometric_H_epoch_corrected_m': 'NaN',
+                        **_igs14_cols(),
                     })
                     nan_count += 1
                     errors.append((pid, 'Point outside all grid regions'))
@@ -888,6 +1197,7 @@ def run_batch():
                         'epoch': EPOCH,
                         'undulation_N_epoch_corrected_m': f"{N_corr:.4f}" if N_corr is not None else 'NaN',
                         'orthometric_H_epoch_corrected_m': f"{H_corr:.4f}" if H_corr is not None else 'NaN',
+                        **_igs14_cols(),
                     })
                     successful += 1
                     print('OK')
@@ -907,6 +1217,7 @@ def run_batch():
                         'epoch': EPOCH,
                         'undulation_N_epoch_corrected_m': 'NaN',
                         'orthometric_H_epoch_corrected_m': 'NaN',
+                        **_igs14_cols(),
                     })
                 except Exception:
                     # Fallback if lat/lon never parsed — write raw strings
@@ -921,6 +1232,11 @@ def run_batch():
                         'epoch': EPOCH,
                         'undulation_N_epoch_corrected_m': 'NaN',
                         'orthometric_H_epoch_corrected_m': 'NaN',
+                        'input_frame': '',
+                        'lat_igs14': '',
+                        'lon_igs14': '',
+                        'eht_igs14_m': '',
+                        'coord_out_epoch': '',
                     })
                 nan_count += 1
                 errors.append((pid, str(e)))
@@ -959,6 +1275,17 @@ def run_batch():
         log_f.write(f'  Reference T0:    {T0}\n')
         log_f.write(f'  Overwrite Mode:  {overwrite_mode}\n')
         log_f.write(f'  GGXF File:       {ggxf_path}\n')
+        if config['transform_enabled']:
+            log_f.write(f'  Horiz Transform: {config["input_frame"]} -> '
+                        f'{HTDP_OUTPUT_FRAME_NAME}\n')
+            log_f.write(f'  Transform Epochs: input {config["input_epoch"]} '
+                        f'-> output {config["output_epoch"]}\n')
+            if htdp_path:
+                log_f.write(f'  HTDP Executable: {htdp_path}\n')
+            if transform_note:
+                log_f.write(f'  Transform Note:  {transform_note}\n')
+        else:
+            log_f.write(f'  Horiz Transform: disabled\n')
         log_f.write('='*60 + '\n')
         log_f.write(f'  Total Points:    {total}\n')
         log_f.write(f'  Successful:      {successful}\n')

@@ -244,14 +244,43 @@ file whose name contains the word `input` and ends in `.csv`
 the tool stops and lists them so you can remove the extras. See
 `input/README.txt`.
 
-Required columns:
+**Required columns (all four must be present):**
 
-OPUS_PID,lat,lon,ellip_h_m
+| Column | Meaning |
+|---|---|
+| `OPUS_PID` | Point identifier / label (any text) |
+| `lat` | Latitude, decimal degrees, positive north |
+| `lon` | Longitude, decimal degrees, **positive-west** (see below) |
+| `ellip_h_m` | Ellipsoidal height, meters (GRS80) |
 
-Example:
+**Header rules:**
+- **Case-insensitive** — `lat`, `LAT`, `Lat` are all accepted (likewise for
+  the others).
+- **Surrounding whitespace is ignored** — ` lat ` matches `lat`.
+- **Column order does not matter** — the tool matches by header name.
+- **Extra columns are ignored** — you may keep additional columns in your
+  file; the tool only reads the four above.
+- The first row **must** be the header row with these column names.
+
+The `OPUS_PID` *values* (your station labels) are used exactly as written;
+only the header names are normalized.
+
+Example (any of these header spellings/orders work):
+
+```
 OPUS_PID,lat,lon,ellip_h_m
 BBFG38,55.03511259,133.0239682,-1.964
 BBBW71,55.09597375,131.2221351,-2.312
+```
+
+```
+LON,LAT,Ellip_H_M,OPUS_PID
+133.0239682,55.03511259,-1.964,BBFG38
+```
+
+See also the longitude-convention and horizontal-reference-frame
+requirements above — they govern the *values*, while the rules here govern
+the *headers*.
 
 
 ## Output Files

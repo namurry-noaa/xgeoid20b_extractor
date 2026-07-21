@@ -16,7 +16,11 @@ REQUIRED COLUMNS
   lat        - Latitude, decimal degrees, positive north
   lon        - Longitude, decimal degrees, positive-WEST (NGS/OPUS
                convention, e.g. 133.024 for SE Alaska)
-  ellip_h_m  - Ellipsoidal height, meters (GRS80, IGS14 frame)
+  ellip_h_m  - Ellipsoidal height, meters (GRS80)
+
+  Header names are CASE-INSENSITIVE (lat = LAT = Lat), surrounding
+  whitespace is ignored, and COLUMN ORDER does not matter. Extra
+  columns are ignored. The first row must be the header row.
 
 IMPORTANT
 ------------------------------------------------------------

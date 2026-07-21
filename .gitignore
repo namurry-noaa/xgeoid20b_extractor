@@ -13,6 +13,10 @@ output/*
 !output/README.txt
 !output/ak_example_output.csv
 
+# logs/ folder: track the README, ignore the generated batch logs.
+logs/*
+!logs/README.txt
+
 # Internal LLM session notes — personal working notes, not committed.
 summary.claude
 

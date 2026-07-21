@@ -42,7 +42,7 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.2.0
+# Version:                    2.4.0
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -59,6 +59,7 @@ import numpy as np
 import csv
 import os
 import sys
+import json
 import configparser
 import subprocess
 import tempfile
@@ -66,7 +67,7 @@ import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '2.3.0'
+__version__ = '2.4.0'
 
 
 # --- File Paths ---
@@ -109,16 +110,21 @@ DEFAULTS = {
     'ggxf_file': '',
     'input_dir': 'input',
     'output_dir': 'output',
+    'log_dir': 'logs',
     'model': 'xGEOID20B',
     'epoch': 2020.0,
     't0': 2005.0,
     'overwrite': 'always',
+    'format': 'csv',
     'transform_enabled': True,
     'input_frame': '2011',
     'input_epoch': '2010.0',
     'output_epoch': '2010.0',
     'htdp_exe': '',
 }
+
+# Supported output formats.
+SUPPORTED_FORMATS = ('csv', 'json', 'xlsx')
 
 
 # --- Constants (populated from config in run_batch; defaults here) ---
@@ -301,8 +307,10 @@ def load_config():
         cfg['ggxf_file'] = get('paths', 'ggxf_file', cfg['ggxf_file'])
         cfg['input_dir'] = get('paths', 'input_dir', cfg['input_dir'])
         cfg['output_dir'] = get('paths', 'output_dir', cfg['output_dir'])
+        cfg['log_dir'] = get('paths', 'log_dir', cfg['log_dir'])
         cfg['model'] = get('model', 'model', cfg['model'])
         cfg['overwrite'] = get('options', 'overwrite', cfg['overwrite']).lower()
+        cfg['format'] = get('options', 'format', cfg['format'])
 
         # Transform section
         enabled_raw = get('transform', 'enabled', None)
@@ -338,6 +346,25 @@ def load_config():
               f"Using default '{DEFAULTS['input_frame']}'.")
         frame_key = DEFAULTS['input_frame']
     cfg['input_frame'] = frame_key
+
+    # Parse + validate the output format list (comma-separated).
+    raw_formats = str(cfg['format']).split(',')
+    fmts = []
+    for tok in raw_formats:
+        t = tok.strip().lower()
+        if t == '':
+            continue
+        if t not in SUPPORTED_FORMATS:
+            print(f"WARNING: config options.format has unsupported value "
+                  f"'{tok.strip()}'; ignoring it. Supported: "
+                  f"{', '.join(SUPPORTED_FORMATS)}.")
+            continue
+        if t not in fmts:      # dedupe, preserve order
+            fmts.append(t)
+    if not fmts:
+        print(f"WARNING: no valid output format selected; using 'csv'.")
+        fmts = ['csv']
+    cfg['formats'] = fmts
 
     return cfg
 
@@ -451,15 +478,15 @@ def _timestamped_name(input_path, suffix, ext, run_utc):
     return f"{base}_{suffix}_{stamp}.{ext}"
 
 
-def generate_output_filename(input_path, output_dir, run_utc):
-    """UTC-timestamped output CSV path in output_dir."""
+def generate_output_filename(input_path, output_dir, run_utc, ext='csv'):
+    """UTC-timestamped output path in output_dir for a given extension."""
     return os.path.join(output_dir,
-                        _timestamped_name(input_path, 'output', 'csv', run_utc))
+                        _timestamped_name(input_path, 'output', ext, run_utc))
 
 
-def generate_log_filename(input_path, output_dir, run_utc):
-    """UTC-timestamped batch log path in output_dir."""
-    return os.path.join(output_dir,
+def generate_log_filename(input_path, log_dir, run_utc):
+    """UTC-timestamped batch log path in log_dir."""
+    return os.path.join(log_dir,
                         _timestamped_name(input_path, 'batch_log', 'txt', run_utc))
 
 
@@ -931,6 +958,70 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
 
 
 # =============================================================================
+# Output Writers (csv / json / xlsx)
+# =============================================================================
+
+class MissingDependencyError(Exception):
+    """Raised when an optional output format needs a package that isn't installed."""
+    pass
+
+
+def write_csv(path, fieldnames, rows):
+    """Write rows to a CSV file (same format as prior versions)."""
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+
+
+def write_json(path, run_meta, fieldnames, rows):
+    """
+    Write a JSON file: a metadata wrapper plus a data array.
+
+    { "metadata": {...run info...},
+      "columns": [...],
+      "data": [ {col: val, ...}, ... ] }
+    """
+    doc = {
+        'metadata': run_meta,
+        'columns': list(fieldnames),
+        'data': [dict(r) for r in rows],
+    }
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(doc, f, indent=2)
+        f.write('\n')
+
+
+def write_xlsx(path, fieldnames, rows):
+    """
+    Write rows to an .xlsx workbook (single sheet).
+
+    Requires openpyxl. Raises MissingDependencyError (handled gracefully by
+    the caller) if openpyxl is not installed, so the other formats and the
+    run still complete.
+    """
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        raise MissingDependencyError(
+            "xlsx output requested but the 'openpyxl' package is not "
+            "installed. Install it with:\n"
+            "        conda install -c conda-forge openpyxl\n"
+            "      (or 'pip install openpyxl'). Skipping xlsx output; other "
+            "formats were still written."
+        )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'xGEOID20B'
+    ws.append(list(fieldnames))
+    for r in rows:
+        ws.append([r.get(c, '') for c in fieldnames])
+    wb.save(path)
+
+
+# =============================================================================
 # Batch Processing
 # =============================================================================
 
@@ -946,6 +1037,8 @@ def run_batch():
     overwrite_mode = config['overwrite']
     input_dir = resolve_dir(config['input_dir'])
     output_dir = resolve_dir(config['output_dir'])
+    log_dir = resolve_dir(config['log_dir'])
+    formats = config['formats']
 
     # --- Locate input file (single file in input_dir; error on multiple) ---
     input_path, input_error = find_input_file(input_dir)
@@ -956,15 +1049,20 @@ def run_batch():
     # --- Run timestamp (UTC / GMT) drives output + log filenames ---
     run_start = datetime.now(timezone.utc)
 
-    output_path = generate_output_filename(input_path, output_dir, run_start)
-    log_path = generate_log_filename(input_path, output_dir, run_start)
+    # One output path per requested format; log goes to log_dir.
+    output_paths = {
+        fmt: generate_output_filename(input_path, output_dir, run_start, ext=fmt)
+        for fmt in formats
+    }
+    log_path = generate_log_filename(input_path, log_dir, run_start)
 
-    # --- Ensure output directory exists ---
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-    except OSError as e:
-        print(f"ERROR: Could not create output directory {output_dir}: {e}")
-        sys.exit(1)
+    # --- Ensure output + log directories exist ---
+    for d in (output_dir, log_dir):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError as e:
+            print(f"ERROR: Could not create directory {d}: {e}")
+            sys.exit(1)
 
     # --- Banner ---
     print(f"\n{'='*60}")
@@ -972,10 +1070,11 @@ def run_batch():
     print(f"{'='*60}")
 
     # --- Overwrite policy for the (rare) timestamp collision ---
-    if not check_file_overwrite(output_path, overwrite_mode):
-        print(f"\n  Output file will not be overwritten (overwrite=never).")
-        print(f"  Exiting.\n")
-        sys.exit(0)
+    for fmt, p in output_paths.items():
+        if not check_file_overwrite(p, overwrite_mode):
+            print(f"\n  Output file will not be overwritten (overwrite=never).")
+            print(f"  Exiting.\n")
+            sys.exit(0)
 
     if not check_file_overwrite(log_path, overwrite_mode):
         print(f"\n  Log file will not be overwritten (overwrite=never).")
@@ -983,7 +1082,8 @@ def run_batch():
         sys.exit(0)
 
     print(f"  Input:    {os.path.basename(input_path)}")
-    print(f"  Output:   {os.path.basename(output_path)}")
+    print(f"  Output:   {', '.join(os.path.basename(p) for p in output_paths.values())}")
+    print(f"  Formats:  {', '.join(formats)}")
     print(f"  Log:      {os.path.basename(log_path)}")
     print(f"  Model:    {MODEL}")
     print(f"  Epoch:    {EPOCH}")
@@ -1094,7 +1194,7 @@ def run_batch():
     else:
         transform_note = "Transform disabled in config."
 
-    # --- Output CSV setup ---
+    # --- Output columns ---
     output_fieldnames = [
         'OPUS_PID',
         'lat',
@@ -1113,139 +1213,170 @@ def run_batch():
         'coord_out_epoch',
     ]
 
-    # --- Process rows ---
-    with open(output_path, 'w', newline='', encoding='utf-8') as out_f:
-        writer = csv.DictWriter(out_f, fieldnames=output_fieldnames)
-        writer.writeheader()
+    # --- Build all output rows once (then serialize to each format) ---
+    out_rows = []
+    for idx, row in enumerate(rows, start=1):
+        pid = row.get('OPUS_PID', f'ROW_{idx}').strip()
 
-        for idx, row in enumerate(rows, start=1):
-            pid = row.get('OPUS_PID', f'ROW_{idx}').strip()
+        print(f"  Processing {pid:<12} ({idx} of {total})...", end=' ')
 
-            print(f"  Processing {pid:<12} ({idx} of {total})...", end=' ')
-
-            # IGS14 transform columns for this row (blank if unavailable).
-            def _igs14_cols():
-                vals = igs14_by_idx.get(idx)
-                if vals is None:
-                    return {
-                        'input_frame': config['input_frame'] if config['transform_enabled'] else '',
-                        'lat_igs14': '',
-                        'lon_igs14': '',
-                        'eht_igs14_m': '',
-                        'coord_out_epoch': config['output_epoch'] if config['transform_enabled'] else '',
-                    }
-                lat_i, lon_i, eht_i = vals
+        # IGS14 transform columns for this row (blank if unavailable).
+        def _igs14_cols():
+            vals = igs14_by_idx.get(idx)
+            if vals is None:
                 return {
-                    'input_frame': config['input_frame'],
-                    'lat_igs14': f"{lat_i:.8f}",
-                    'lon_igs14': f"{lon_i:.8f}",
-                    'eht_igs14_m': f"{eht_i:.4f}",
-                    'coord_out_epoch': config['output_epoch'],
+                    'input_frame': config['input_frame'] if config['transform_enabled'] else '',
+                    'lat_igs14': '',
+                    'lon_igs14': '',
+                    'eht_igs14_m': '',
+                    'coord_out_epoch': config['output_epoch'] if config['transform_enabled'] else '',
                 }
+            lat_i, lon_i, eht_i = vals
+            return {
+                'input_frame': config['input_frame'],
+                'lat_igs14': f"{lat_i:.8f}",
+                'lon_igs14': f"{lon_i:.8f}",
+                'eht_igs14_m': f"{eht_i:.4f}",
+                'coord_out_epoch': config['output_epoch'],
+            }
 
-            try:
-                lat = float(row['lat'])
-                lon = float(row['lon'])
-                ellip_h = float(row['ellip_h_m'])
+        try:
+            lat = float(row['lat'])
+            lon = float(row['lon'])
+            ellip_h = float(row['ellip_h_m'])
 
-                result = extract_value(ds, lat, lon, epoch=EPOCH, pid=pid)
+            result = extract_value(ds, lat, lon, epoch=EPOCH, pid=pid)
 
-                # Capture any longitude convention warning
-                if result and result['lon_warning'] is not None:
-                    lon_warnings.append((pid, result['lon_warning']))
-                    print(f'\n  [!] Longitude warning for {pid} - see log file')
+            # Capture any longitude convention warning
+            if result and result['lon_warning'] is not None:
+                lon_warnings.append((pid, result['lon_warning']))
+                print(f'\n  [!] Longitude warning for {pid} - see log file')
 
-                if result is None:
-                    # Point outside all grids
-                    writer.writerow({
-                        'OPUS_PID': pid,
-                        'lat': f"{lat:.8f}",
-                        'lon': f"{lon:.8f}",
-                        'ellip_h_m': f"{ellip_h:.4f}",
-                        'region': 'OUTSIDE GRID',
-                        'undulation_N_m': 'NaN',
-                        'orthometric_H_m': 'NaN',
-                        'epoch': EPOCH,
-                        'undulation_N_epoch_corrected_m': 'NaN',
-                        'orthometric_H_epoch_corrected_m': 'NaN',
-                        **_igs14_cols(),
-                    })
-                    nan_count += 1
-                    errors.append((pid, 'Point outside all grid regions'))
-                    print('NaN - outside grid')
-
-                else:
-                    # Compute orthometric heights
-                    N = result['undulation_N']
-                    N_corr = result['undulation_N_corrected']
-                    H = ellip_h - N
-                    H_corr = ellip_h - N_corr if N_corr is not None else None
-
-                    # Note points whose interpolation stencil was clamped
-                    # at a grid edge (result is a mild extrapolation).
-                    if result.get('edge_clamped'):
-                        edge_warnings.append((pid, result['region']))
-
-                    writer.writerow({
-                        'OPUS_PID': pid,
-                        'lat': f"{lat:.8f}",
-                        'lon': f"{lon:.8f}",
-                        'ellip_h_m': f"{ellip_h:.4f}",
-                        'region': result['region'],
-                        'undulation_N_m': f"{N:.4f}",
-                        'orthometric_H_m': f"{H:.4f}",
-                        'epoch': EPOCH,
-                        'undulation_N_epoch_corrected_m': f"{N_corr:.4f}" if N_corr is not None else 'NaN',
-                        'orthometric_H_epoch_corrected_m': f"{H_corr:.4f}" if H_corr is not None else 'NaN',
-                        **_igs14_cols(),
-                    })
-                    successful += 1
-                    print('OK')
-
-            except Exception as e:
-                # Unexpected error on this row
-                try:
-                    # Attempt formatted output if lat/lon parsed successfully
-                    writer.writerow({
-                        'OPUS_PID': pid,
-                        'lat': f"{lat:.8f}",
-                        'lon': f"{lon:.8f}",
-                        'ellip_h_m': f"{ellip_h:.4f}",
-                        'region': 'ERROR',
-                        'undulation_N_m': 'NaN',
-                        'orthometric_H_m': 'NaN',
-                        'epoch': EPOCH,
-                        'undulation_N_epoch_corrected_m': 'NaN',
-                        'orthometric_H_epoch_corrected_m': 'NaN',
-                        **_igs14_cols(),
-                    })
-                except Exception:
-                    # Fallback if lat/lon never parsed — write raw strings
-                    writer.writerow({
-                        'OPUS_PID': pid,
-                        'lat': row.get('lat', 'NaN'),
-                        'lon': row.get('lon', 'NaN'),
-                        'ellip_h_m': row.get('ellip_h_m', 'NaN'),
-                        'region': 'ERROR',
-                        'undulation_N_m': 'NaN',
-                        'orthometric_H_m': 'NaN',
-                        'epoch': EPOCH,
-                        'undulation_N_epoch_corrected_m': 'NaN',
-                        'orthometric_H_epoch_corrected_m': 'NaN',
-                        'input_frame': '',
-                        'lat_igs14': '',
-                        'lon_igs14': '',
-                        'eht_igs14_m': '',
-                        'coord_out_epoch': '',
-                    })
+            if result is None:
+                # Point outside all grids
+                out_rows.append({
+                    'OPUS_PID': pid,
+                    'lat': f"{lat:.8f}",
+                    'lon': f"{lon:.8f}",
+                    'ellip_h_m': f"{ellip_h:.4f}",
+                    'region': 'OUTSIDE GRID',
+                    'undulation_N_m': 'NaN',
+                    'orthometric_H_m': 'NaN',
+                    'epoch': EPOCH,
+                    'undulation_N_epoch_corrected_m': 'NaN',
+                    'orthometric_H_epoch_corrected_m': 'NaN',
+                    **_igs14_cols(),
+                })
                 nan_count += 1
-                errors.append((pid, str(e)))
-                print(f'ERROR - {e}')
+                errors.append((pid, 'Point outside all grid regions'))
+                print('NaN - outside grid')
+
+            else:
+                # Compute orthometric heights
+                N = result['undulation_N']
+                N_corr = result['undulation_N_corrected']
+                H = ellip_h - N
+                H_corr = ellip_h - N_corr if N_corr is not None else None
+
+                # Note points whose interpolation stencil was clamped
+                # at a grid edge (result is a mild extrapolation).
+                if result.get('edge_clamped'):
+                    edge_warnings.append((pid, result['region']))
+
+                out_rows.append({
+                    'OPUS_PID': pid,
+                    'lat': f"{lat:.8f}",
+                    'lon': f"{lon:.8f}",
+                    'ellip_h_m': f"{ellip_h:.4f}",
+                    'region': result['region'],
+                    'undulation_N_m': f"{N:.4f}",
+                    'orthometric_H_m': f"{H:.4f}",
+                    'epoch': EPOCH,
+                    'undulation_N_epoch_corrected_m': f"{N_corr:.4f}" if N_corr is not None else 'NaN',
+                    'orthometric_H_epoch_corrected_m': f"{H_corr:.4f}" if H_corr is not None else 'NaN',
+                    **_igs14_cols(),
+                })
+                successful += 1
+                print('OK')
+
+        except Exception as e:
+            # Unexpected error on this row
+            try:
+                row_out = {
+                    'OPUS_PID': pid,
+                    'lat': f"{lat:.8f}",
+                    'lon': f"{lon:.8f}",
+                    'ellip_h_m': f"{ellip_h:.4f}",
+                    'region': 'ERROR',
+                    'undulation_N_m': 'NaN',
+                    'orthometric_H_m': 'NaN',
+                    'epoch': EPOCH,
+                    'undulation_N_epoch_corrected_m': 'NaN',
+                    'orthometric_H_epoch_corrected_m': 'NaN',
+                    **_igs14_cols(),
+                }
+            except Exception:
+                # Fallback if lat/lon never parsed — write raw strings
+                row_out = {
+                    'OPUS_PID': pid,
+                    'lat': row.get('lat', 'NaN'),
+                    'lon': row.get('lon', 'NaN'),
+                    'ellip_h_m': row.get('ellip_h_m', 'NaN'),
+                    'region': 'ERROR',
+                    'undulation_N_m': 'NaN',
+                    'orthometric_H_m': 'NaN',
+                    'epoch': EPOCH,
+                    'undulation_N_epoch_corrected_m': 'NaN',
+                    'orthometric_H_epoch_corrected_m': 'NaN',
+                    'input_frame': '',
+                    'lat_igs14': '',
+                    'lon_igs14': '',
+                    'eht_igs14_m': '',
+                    'coord_out_epoch': '',
+                }
+            out_rows.append(row_out)
+            nan_count += 1
+            errors.append((pid, str(e)))
+            print(f'ERROR - {e}')
 
     ds.close()
 
     run_end = datetime.now(timezone.utc)
     duration = run_end - run_start
+
+    # --- Write each requested output format ---
+    written_files = []
+    run_meta = {
+        'tool': 'xGEOID20B Batch Extraction',
+        'version': __version__,
+        'run_utc': run_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'input_file': os.path.basename(input_path),
+        'model': MODEL,
+        'epoch': EPOCH,
+        'reference_t0': T0,
+        'transform_enabled': config['transform_enabled'],
+        'input_frame': config['input_frame'] if config['transform_enabled'] else None,
+        'output_frame': HTDP_OUTPUT_FRAME_NAME if config['transform_enabled'] else None,
+        'transform_input_epoch': config['input_epoch'] if config['transform_enabled'] else None,
+        'transform_output_epoch': config['output_epoch'] if config['transform_enabled'] else None,
+        'total_points': total,
+        'successful': successful,
+        'nan_or_errors': nan_count,
+    }
+    for fmt in formats:
+        path = output_paths[fmt]
+        try:
+            if fmt == 'csv':
+                write_csv(path, output_fieldnames, out_rows)
+            elif fmt == 'json':
+                write_json(path, run_meta, output_fieldnames, out_rows)
+            elif fmt == 'xlsx':
+                write_xlsx(path, output_fieldnames, out_rows)
+            written_files.append(os.path.basename(path))
+        except MissingDependencyError as e:
+            print(f"  [!] {e}")
+        except Exception as e:
+            print(f"  [!] Failed to write {fmt} output: {e}")
 
     # --- Console Summary ---
     print(f"\n{'='*60}")
@@ -1257,7 +1388,7 @@ def run_batch():
     if edge_warnings:
         print(f"  Edge-clamped:    {len(edge_warnings)} (see log file)")
     print(f"  Duration:        {duration}")
-    print(f"  Output file:     {os.path.basename(output_path)}")
+    print(f"  Output file(s):  {', '.join(written_files) if written_files else '(none written)'}")
     print(f"  Log file:        {os.path.basename(log_path)}")
     print(f"{'='*60}\n")
 
@@ -1269,7 +1400,8 @@ def run_batch():
         log_f.write(f'  Version:         {__version__}\n')
         log_f.write(f'  Run Date/Time:   {run_start.strftime("%Y-%m-%d %H:%M:%S")} UTC\n')
         log_f.write(f'  Input File:      {os.path.basename(input_path)}\n')
-        log_f.write(f'  Output File:     {os.path.basename(output_path)}\n')
+        log_f.write(f'  Output File(s):  {", ".join(written_files) if written_files else "(none)"}\n')
+        log_f.write(f'  Formats:         {", ".join(formats)}\n')
         log_f.write(f'  Model:           {MODEL}\n')
         log_f.write(f'  Epoch:           {EPOCH}\n')
         log_f.write(f'  Reference T0:    {T0}\n')

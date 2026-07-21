@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] - 2026-07-21
+
+### Added
+- **Multiple output formats.** New `format` option in `config.ini`
+  (`[options]`) selects one or more of `csv`, `json`, `xlsx`,
+  comma-separated (default `csv`). All formats contain the same data and
+  are written in a single run.
+  - `json` output is a wrapper object with a `metadata` block (version,
+    model, epoch, transform frames/epochs, counts, run timestamp), a
+    `columns` list, and a `data` array of row objects.
+  - `xlsx` output (single-sheet Excel workbook) requires `openpyxl`; if the
+    package is missing the xlsx output is skipped with a clear warning and
+    the other formats and the run still complete.
+- **Dedicated `logs/` folder** (tracked `README.txt`) for batch logs, with
+  a `log_dir` setting under `[paths]`. Logs previously shared the output
+  location; they now live in `logs/`.
+
+### Changed
+- `openpyxl` added to `environment.yml` and `requirements.txt` (only used
+  for `xlsx` output).
+- Console summary and batch log now report the format(s) written.
+
+### Backward compatibility
+- Non-breaking (MINOR). Default output is still a single CSV, byte-for-byte
+  identical to v2.3.0. The only behavioral change is that the batch log now
+  lands in `logs/` instead of `output/`.
+
 ## [2.3.0] - 2026-07-20
 
 ### Added

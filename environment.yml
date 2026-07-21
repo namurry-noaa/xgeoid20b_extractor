@@ -24,6 +24,9 @@ dependencies:
   # their binary libraries (HDF5, netCDF-C) far more reliably than pip.
   - netCDF4>=1.6.0
   - numpy>=1.23.0
+  # openpyxl is only needed for the optional 'xlsx' output format. If it is
+  # absent, the tool simply skips xlsx output (CSV/JSON still work).
+  - openpyxl>=3.0.0
 
 # NOTE: The optional horizontal coordinate transform (NAD83 realizations ->
 # IGS14) drives the bundled NGS HTDP utility (HTDP/htdp360.exe) via Python's

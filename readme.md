@@ -171,7 +171,8 @@ configured so the downloaded `*.ggxf` file is never committed.
 
 
 ## Requirements
-Python 3.10+ and two packages: **netCDF4** and **numpy**.
+Python 3.10+ and: **netCDF4**, **numpy**, and **openpyxl** (the last only
+needed for `xlsx` output).
 
 **Conda is the recommended package manager.** netCDF4 and numpy depend on
 compiled binary libraries (HDF5, netCDF-C); conda resolves and installs
@@ -254,11 +255,31 @@ BBBW71,55.09597375,131.2221351,-2.312
 
 
 ## Output Files
-Both output files are written to the **`output/`** folder with UTC
-timestamped names (see Default Behavior above):
+Result files are written to the **`output/`** folder and the batch log to
+the **`logs/`** folder, all with UTC timestamped names (see Default
+Behavior above).
 
-1.  Output CSV — `<inputbase>_output_YYYYMMDDThhmmZ.csv`
-Column Description:
+### Output data — one or more formats
+The `format` option in `config.ini` selects the output format(s). One or
+more of `csv`, `json`, `xlsx`, comma-separated (default `csv`):
+
+```ini
+format = csv            ; just CSV (default)
+format = csv,json       ; CSV and JSON
+format = csv,json,xlsx  ; all three
+```
+
+All formats contain the **same data**. Files are named
+`<inputbase>_output_YYYYMMDDThhmmZ.<ext>`:
+- **csv** — comma-separated values (columns below).
+- **json** — a `metadata` block (run/config info) plus a `data` array of
+  row objects and a `columns` list.
+- **xlsx** — Excel workbook (single sheet). Requires the `openpyxl`
+  package; if it is not installed the xlsx output is skipped with a
+  warning and the other formats still run.
+
+Column description (same for every format):
+
 OPUS_PID -- NGS OPUS Permanent Identifier
 lat -- Latitude (decimal degrees, 8dp)
 lon -- Longitude (decimal degrees, 8dp)
@@ -275,12 +296,13 @@ lon_igs14 -- Longitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
 eht_igs14_m -- Ellipsoidal height in ITRF2014/IGS14 (m, 4dp)
 coord_out_epoch -- Output epoch of the transformed coordinates
 
-2.  Batch Log — `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`
+### Batch log
+Written to `logs/` as `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`.
 
 Contains:
 
 Run timestamp (UTC) and duration
-Input/output file names
+Input/output file names and formats
 Total points processed, successful, and NaN/error counts
 Longitude convention warnings (if any)
 Grid edge warnings (if any)
@@ -298,6 +320,7 @@ the box.
 ggxf_file  =                 ; blank = use env var, then GGXF/xGEOID20.ggxf
 input_dir  = input
 output_dir = output
+log_dir    = logs
 
 [model]
 model = xGEOID20B
@@ -306,6 +329,7 @@ t0    = 2005.0
 
 [options]
 overwrite = always           ; always | never | prompt
+format    = csv              ; csv | json | xlsx  (comma-separated for multiple)
 
 [transform]
 enabled      = true          ; true | false
@@ -316,8 +340,11 @@ htdp_exe     =               ; blank = bundled HTDP/htdp360.exe
 ```
 
 Notes:
-- `input_dir` / `output_dir` may be relative (to the script directory) or
-  absolute.
+- `input_dir` / `output_dir` / `log_dir` may be relative (to the script
+  directory) or absolute.
+- `format` selects one or more output formats (`csv`, `json`, `xlsx`),
+  comma-separated. `xlsx` needs the `openpyxl` package; if absent it is
+  skipped with a warning and the other formats still run.
 - `overwrite` governs the rare case that a timestamped output file already
   exists (same-minute rerun): `always` overwrites silently (default),
   `never` skips and exits, `prompt` asks (interactive terminals only; in a

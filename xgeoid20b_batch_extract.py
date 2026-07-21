@@ -42,7 +42,7 @@
 # Reference Epoch T0:         2005.0
 # Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.4.1
+# Version:                    2.4.3
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -67,7 +67,7 @@ import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '2.4.1'
+__version__ = '2.4.3'
 
 
 # --- File Paths ---
@@ -116,7 +116,6 @@ DEFAULTS = {
     't0': 2005.0,
     'overwrite': 'always',
     'format': 'csv',
-    'transform_enabled': True,
     'input_frame': '2011',
     'input_epoch': '2010.0',
     'output_epoch': '2010.0',
@@ -254,6 +253,33 @@ def correct_ngs_lon(lon, pid='UNKNOWN'):
     return lon360, warning
 
 
+def htdp_positive_west_lon(lon):
+    """
+    Convert an input longitude to the POSITIVE-WEST value HTDP expects.
+
+    HTDP (menu option 4) interprets longitudes as positive-west. The tool's
+    geoid path first canonicalizes any input longitude to 0-360 EAST via
+    correct_ngs_lon(); positive-west is simply (360 - that east value).
+    Reusing the same canonical east longitude keeps the HTDP path and the
+    geoid path consistent about what a given input number means, and it fixes
+    the case where a raw negative-west longitude would otherwise be misread by
+    HTDP as an east longitude (placing the point in the wrong hemisphere and
+    corrupting both the longitude and the transformed ellipsoidal height).
+
+    Parameters
+    ----------
+    lon : float
+        Input longitude (same convention as fed to the geoid path).
+
+    Returns
+    -------
+    float
+        Longitude in positive-west convention (0..360) for HTDP.
+    """
+    lon360_east, _ = correct_ngs_lon(lon)
+    return (360.0 - lon360_east) % 360.0
+
+
 def point_in_grid(lat, lon360, meta):
     """Check if a lat/lon point falls within a grid's bounds."""
     lat0 = meta['lat0']
@@ -312,10 +338,7 @@ def load_config():
         cfg['overwrite'] = get('options', 'overwrite', cfg['overwrite']).lower()
         cfg['format'] = get('options', 'format', cfg['format'])
 
-        # Transform section
-        enabled_raw = get('transform', 'enabled', None)
-        if enabled_raw is not None:
-            cfg['transform_enabled'] = enabled_raw.strip().lower() in ('true', '1', 'yes', 'on')
+        # Transform section (the transform always runs; there is no on/off)
         cfg['input_frame'] = get('transform', 'input_frame', cfg['input_frame'])
         cfg['input_epoch'] = get('transform', 'input_epoch', cfg['input_epoch'])
         cfg['output_epoch'] = get('transform', 'output_epoch', cfg['output_epoch'])
@@ -1088,11 +1111,8 @@ def run_batch():
     print(f"  Model:    {MODEL}")
     print(f"  Epoch:    {EPOCH}")
     print(f"  Overwrite:{overwrite_mode}")
-    if config['transform_enabled']:
-        print(f"  Transform:{config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME} "
-              f"(epochs {config['input_epoch']} -> {config['output_epoch']})")
-    else:
-        print(f"  Transform:disabled")
+    print(f"  Transform:{config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME} "
+          f"(epochs {config['input_epoch']} -> {config['output_epoch']})")
     print(f"  Started:  {run_start.strftime('%Y-%m-%d %H:%M:%S')} UTC")
     print(f"{'='*60}\n")
 
@@ -1170,52 +1190,48 @@ def run_batch():
         sys.exit(1)
 
     # --- Horizontal transform (NAD83 realization -> IGS14) via HTDP ---
-    # Computed up front as a batch (one HTDP invocation for all points).
-    # Keyed by row index so results line up with the output rows. If the
-    # transform is disabled or fails, IGS14 columns are left blank and a
-    # note is logged; the geoid computation is unaffected.
+    # The transform ALWAYS runs (IGS14 coordinates are core output). HTDP is
+    # required; fail fast if it is missing. Computed up front as a single
+    # batch (one HTDP invocation for all points), keyed by row index so the
+    # results line up with the output rows.
+    try:
+        htdp_path = resolve_htdp_path(config['htdp_exe'])
+    except FileNotFoundError as e:
+        print(f"\nERROR: {e}")
+        sys.exit(1)
+
     igs14_by_idx = {}
-    transform_note = None
-    htdp_path = None
-    if config['transform_enabled']:
+    # Build records from rows that have parseable coordinates. HTDP expects
+    # positive-west longitude; convert from the input convention (consistent
+    # with the geoid path) before feeding it.
+    recs = []
+    rec_idx = []
+    for idx, row in enumerate(rows, start=1):
         try:
-            htdp_path = resolve_htdp_path(config['htdp_exe'])
-        except FileNotFoundError as e:
-            transform_note = f"Transform skipped: {e}"
-            print(f"  [!] {transform_note}")
+            lat = float(row['lat'])
+            lon = float(row['lon'])
+            eht = float(row['ellip_h_m'])
+        except (KeyError, ValueError, TypeError):
+            continue
+        lon_pw = htdp_positive_west_lon(lon)
+        recs.append((lat, lon_pw, eht, f"IDX{idx}"))
+        rec_idx.append(idx)
 
-        if htdp_path:
-            # Build records from rows that have parseable coordinates.
-            recs = []
-            rec_idx = []
-            for idx, row in enumerate(rows, start=1):
-                try:
-                    lat = float(row['lat'])
-                    lon = float(row['lon'])
-                    eht = float(row['ellip_h_m'])
-                except (KeyError, ValueError, TypeError):
-                    continue
-                pid = (row.get('OPUS_PID') or f'ROW_{idx}').strip()
-                recs.append((lat, lon, eht, f"IDX{idx}"))
-                rec_idx.append(idx)
-
-            if recs:
-                print(f"  Running HTDP transform "
-                      f"({config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME}) "
-                      f"on {len(recs)} points...")
-                try:
-                    out = htdp_transform_file(
-                        htdp_path, recs, config['input_frame'],
-                        config['input_epoch'], config['output_epoch'],
-                    )
-                    for k, idx in enumerate(rec_idx):
-                        igs14_by_idx[idx] = out[k]
-                    print(f"  HTDP transform complete.\n")
-                except Exception as e:
-                    transform_note = f"Transform failed: {e}"
-                    print(f"  [!] {transform_note}\n")
-    else:
-        transform_note = "Transform disabled in config."
+    if recs:
+        print(f"  Running HTDP transform "
+              f"({config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME}) "
+              f"on {len(recs)} points...")
+        try:
+            out = htdp_transform_file(
+                htdp_path, recs, config['input_frame'],
+                config['input_epoch'], config['output_epoch'],
+            )
+            for k, idx in enumerate(rec_idx):
+                igs14_by_idx[idx] = out[k]
+            print(f"  HTDP transform complete.\n")
+        except Exception as e:
+            print(f"\nERROR: HTDP transform failed: {e}")
+            sys.exit(1)
 
     # --- Output columns ---
     output_fieldnames = [
@@ -1223,17 +1239,11 @@ def run_batch():
         'lat',
         'lon',
         'ellip_h_m',
-        'region',
-        'undulation_N_m',
-        'orthometric_H_m',
-        'epoch',
-        'undulation_N_epoch_corrected_m',
-        'orthometric_H_epoch_corrected_m',
-        'input_frame',
         'lat_igs14',
         'lon_igs14',
-        'eht_igs14_m',
-        'coord_out_epoch',
+        'igs14_ellip_h_m',
+        'undulation_N_m',
+        'igs14_orthometric_H_m',
     ]
 
     # --- Build all output rows once (then serialize to each format) ---
@@ -1243,25 +1253,18 @@ def run_batch():
 
         print(f"  Processing {pid:<12} ({idx} of {total})...", end=' ')
 
-        # IGS14 transform columns for this row (blank if unavailable).
-        def _igs14_cols():
-            vals = igs14_by_idx.get(idx)
-            if vals is None:
-                return {
-                    'input_frame': config['input_frame'] if config['transform_enabled'] else '',
-                    'lat_igs14': '',
-                    'lon_igs14': '',
-                    'eht_igs14_m': '',
-                    'coord_out_epoch': config['output_epoch'] if config['transform_enabled'] else '',
-                }
-            lat_i, lon_i, eht_i = vals
-            return {
-                'input_frame': config['input_frame'],
+        # IGS14 transformed coordinates for this row (from HTDP).
+        igs14 = igs14_by_idx.get(idx)   # (lat, lon, eht) or None
+        if igs14 is not None:
+            lat_i, lon_i, eht_i = igs14
+            igs14_cols = {
                 'lat_igs14': f"{lat_i:.8f}",
                 'lon_igs14': f"{lon_i:.8f}",
-                'eht_igs14_m': f"{eht_i:.4f}",
-                'coord_out_epoch': config['output_epoch'],
+                'igs14_ellip_h_m': f"{eht_i:.4f}",
             }
+        else:
+            lat_i = lon_i = eht_i = None
+            igs14_cols = {'lat_igs14': '', 'lon_igs14': '', 'igs14_ellip_h_m': ''}
 
         try:
             lat = float(row['lat'])
@@ -1282,24 +1285,25 @@ def run_batch():
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
                     'ellip_h_m': f"{ellip_h:.4f}",
-                    'region': 'OUTSIDE GRID',
+                    **igs14_cols,
                     'undulation_N_m': 'NaN',
-                    'orthometric_H_m': 'NaN',
-                    'epoch': EPOCH,
-                    'undulation_N_epoch_corrected_m': 'NaN',
-                    'orthometric_H_epoch_corrected_m': 'NaN',
-                    **_igs14_cols(),
+                    'igs14_orthometric_H_m': 'NaN',
                 })
                 nan_count += 1
                 errors.append((pid, 'Point outside all grid regions'))
                 print('NaN - outside grid')
 
             else:
-                # Compute orthometric heights
                 N = result['undulation_N']
-                N_corr = result['undulation_N_corrected']
-                H = ellip_h - N
-                H_corr = ellip_h - N_corr if N_corr is not None else None
+
+                # Orthometric height uses the IGS14 ellipsoidal height:
+                #   H = h_IGS14 - N
+                # (matches the archived web tool exactly). Requires the
+                # transformed height; blank if the transform gave nothing.
+                if eht_i is not None:
+                    H_igs14 = f"{(eht_i - N):.4f}"
+                else:
+                    H_igs14 = 'NaN'
 
                 # Note points whose interpolation stencil was clamped
                 # at a grid edge (result is a mild extrapolation).
@@ -1311,13 +1315,9 @@ def run_batch():
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
                     'ellip_h_m': f"{ellip_h:.4f}",
-                    'region': result['region'],
+                    **igs14_cols,
                     'undulation_N_m': f"{N:.4f}",
-                    'orthometric_H_m': f"{H:.4f}",
-                    'epoch': EPOCH,
-                    'undulation_N_epoch_corrected_m': f"{N_corr:.4f}" if N_corr is not None else 'NaN',
-                    'orthometric_H_epoch_corrected_m': f"{H_corr:.4f}" if H_corr is not None else 'NaN',
-                    **_igs14_cols(),
+                    'igs14_orthometric_H_m': H_igs14,
                 })
                 successful += 1
                 print('OK')
@@ -1330,13 +1330,9 @@ def run_batch():
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
                     'ellip_h_m': f"{ellip_h:.4f}",
-                    'region': 'ERROR',
+                    **igs14_cols,
                     'undulation_N_m': 'NaN',
-                    'orthometric_H_m': 'NaN',
-                    'epoch': EPOCH,
-                    'undulation_N_epoch_corrected_m': 'NaN',
-                    'orthometric_H_epoch_corrected_m': 'NaN',
-                    **_igs14_cols(),
+                    'igs14_orthometric_H_m': 'NaN',
                 }
             except Exception:
                 # Fallback if lat/lon never parsed — write raw strings
@@ -1345,17 +1341,11 @@ def run_batch():
                     'lat': row.get('lat', 'NaN'),
                     'lon': row.get('lon', 'NaN'),
                     'ellip_h_m': row.get('ellip_h_m', 'NaN'),
-                    'region': 'ERROR',
-                    'undulation_N_m': 'NaN',
-                    'orthometric_H_m': 'NaN',
-                    'epoch': EPOCH,
-                    'undulation_N_epoch_corrected_m': 'NaN',
-                    'orthometric_H_epoch_corrected_m': 'NaN',
-                    'input_frame': '',
                     'lat_igs14': '',
                     'lon_igs14': '',
-                    'eht_igs14_m': '',
-                    'coord_out_epoch': '',
+                    'igs14_ellip_h_m': '',
+                    'undulation_N_m': 'NaN',
+                    'igs14_orthometric_H_m': 'NaN',
                 }
             out_rows.append(row_out)
             nan_count += 1
@@ -1375,13 +1365,10 @@ def run_batch():
         'run_utc': run_start.strftime('%Y-%m-%dT%H:%M:%SZ'),
         'input_file': os.path.basename(input_path),
         'model': MODEL,
-        'epoch': EPOCH,
-        'reference_t0': T0,
-        'transform_enabled': config['transform_enabled'],
-        'input_frame': config['input_frame'] if config['transform_enabled'] else None,
-        'output_frame': HTDP_OUTPUT_FRAME_NAME if config['transform_enabled'] else None,
-        'transform_input_epoch': config['input_epoch'] if config['transform_enabled'] else None,
-        'transform_output_epoch': config['output_epoch'] if config['transform_enabled'] else None,
+        'input_frame': config['input_frame'],
+        'output_frame': HTDP_OUTPUT_FRAME_NAME,
+        'transform_input_epoch': config['input_epoch'],
+        'transform_output_epoch': config['output_epoch'],
         'total_points': total,
         'successful': successful,
         'nan_or_errors': nan_count,
@@ -1430,17 +1417,11 @@ def run_batch():
         log_f.write(f'  Reference T0:    {T0}\n')
         log_f.write(f'  Overwrite Mode:  {overwrite_mode}\n')
         log_f.write(f'  GGXF File:       {ggxf_path}\n')
-        if config['transform_enabled']:
-            log_f.write(f'  Horiz Transform: {config["input_frame"]} -> '
-                        f'{HTDP_OUTPUT_FRAME_NAME}\n')
-            log_f.write(f'  Transform Epochs: input {config["input_epoch"]} '
-                        f'-> output {config["output_epoch"]}\n')
-            if htdp_path:
-                log_f.write(f'  HTDP Executable: {htdp_path}\n')
-            if transform_note:
-                log_f.write(f'  Transform Note:  {transform_note}\n')
-        else:
-            log_f.write(f'  Horiz Transform: disabled\n')
+        log_f.write(f'  Horiz Transform: {config["input_frame"]} -> '
+                    f'{HTDP_OUTPUT_FRAME_NAME}\n')
+        log_f.write(f'  Transform Epochs: input {config["input_epoch"]} '
+                    f'-> output {config["output_epoch"]}\n')
+        log_f.write(f'  HTDP Executable: {htdp_path}\n')
         log_f.write('='*60 + '\n')
         log_f.write(f'  Total Points:    {total}\n')
         log_f.write(f'  Successful:      {successful}\n')

@@ -5,6 +5,48 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.3] - 2026-07-21
+
+### Fixed
+- **HTDP longitude handling.** Input longitudes are now converted to the
+  positive-west convention HTDP expects (consistent with the geoid path),
+  fixing wrong IGS14 longitude and a grossly wrong transformed ellipsoidal
+  height for negative-west inputs (the point was being placed in the wrong
+  hemisphere).
+- **Orthometric height now uses the IGS14 ellipsoidal height:**
+  `H = igs14_ellip_h_m − N` (previously it subtracted N from the NAD83 input
+  height, mixing frames and introducing a few-cm error). This matches the
+  archived NGS xGEOID20B web tool.
+
+### Changed
+- The horizontal transform **always runs** (the `[transform] enabled` switch
+  has been removed). IGS14 coordinates are core output, as with the web
+  tool. HTDP is now **required**; the tool exits with an error if it is
+  missing.
+- **Output columns revised** to focus on the transformed/extracted results:
+  `OPUS_PID, lat, lon, ellip_h_m, lat_igs14, lon_igs14, igs14_ellip_h_m,
+  undulation_N_m, igs14_orthometric_H_m`. Renamed `eht_igs14_m` →
+  `igs14_ellip_h_m` and `orthometric_H_m` → `igs14_orthometric_H_m`.
+  Removed the `region` and `input_frame` columns.
+- **Removed epoch-related output columns** (`epoch`,
+  `undulation_N_epoch_corrected_m`, `orthometric_H_epoch_corrected_m`,
+  `coord_out_epoch`). The epoch/velocity-correction machinery remains in the
+  code but is not currently emitted; epoch handling will be revisited.
+- `run.ps1` launcher now **pauses on error** (holds the window until a key
+  is pressed so the message can be read) and briefly pauses on success, so
+  results/log location are visible when launched by double-click.
+
+### Validation
+- Verified end-to-end against the archived xGEOID20B web tool output for a
+  316-point real dataset (full-precision NAD83(2011) input): IGS14 lat/lon,
+  ellipsoidal height, undulation N, and orthometric H all agree with the web
+  tool. The HTDP transform regression test (all three realizations) still
+  passes.
+
+## [2.4.2] - 2026-07-21
+
+_Superseded by 2.4.3 (developed on the same branch); not released._
+
 ## [2.4.1] - 2026-07-21
 
 ### Changed

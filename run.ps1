@@ -148,4 +148,21 @@ Write-Host ""
 
 # --- Hand off to the Python tool (it handles data/file issues itself) ---
 & $python $PyScript @args
-exit $LASTEXITCODE
+$code = $LASTEXITCODE
+
+# Keep the window readable when launched by double-click (where it would
+# otherwise close instantly). On error: hold until a key is pressed so the
+# message can be read. On success: a brief pause so the user can see the
+# output/log location scroll by.
+if ($code -ne 0) {
+    Write-Host ""
+    Write-Host "The tool exited with an error (code $code). Review the message above." -ForegroundColor Red
+    Write-Host "Press any key to close..."
+    [void][System.Console]::ReadKey($true)
+} else {
+    Write-Host ""
+    Write-Host "Done. See the output/ and logs/ folders for results." -ForegroundColor Green
+    Start-Sleep -Seconds 3
+}
+
+exit $code

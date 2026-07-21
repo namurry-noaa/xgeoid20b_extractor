@@ -98,10 +98,10 @@ The xGEOID20B model covers the following regions:
 > auto-detection.
 >
 > **Output:** the tool transforms these coordinates to **ITRF2014 / IGS14**
-> (via the bundled NGS HTDP utility) and adds the transformed
-> `lat_igs14`, `lon_igs14`, `eht_igs14_m` as extra output columns. The
-> geoid/orthometric computation itself always uses the **input**
-> coordinates and is unaffected by the transform.
+> (via the bundled NGS HTDP utility) and reports the transformed
+> `lat_igs14`, `lon_igs14`, `igs14_ellip_h_m`. The orthometric height is
+> then computed as **H = igs14_ellip_h_m − N** (matching the archived NGS
+> web tool). The transform always runs and HTDP is required.
 
 > **⚠️ Longitude Convention Warning:**
 > This tool expects **positive west** longitudes as exported by OPUS
@@ -310,20 +310,14 @@ All formats contain the **same data**. Files are named
 Column description (same for every format):
 
 OPUS_PID -- NGS OPUS Permanent Identifier
-lat -- Latitude (decimal degrees, 8dp)
-lon -- Longitude (decimal degrees, 8dp)
-ellip_h_m -- Ellipsoidal height (m, 4dp)
-region -- xGEOID20B grid region used
-undulation_N_m -- Static geoid undulation N (m, 4dp)
-orthometric_H_m -- Static orthometric height H (m, 4dp)
-epoch -- Processing epoch
-undulation_N_epoch_corrected_m -- Epoch-corrected undulation N (m, 4dp)
-orthometric_H_epoch_corrected_m -- Epoch-corrected orthometric height H (m, 4dp)
-input_frame -- NAD83 realization of the input coords (2011/PA11/MA11)
+lat -- Input latitude (decimal degrees, 8dp)
+lon -- Input longitude (decimal degrees, 8dp)
+ellip_h_m -- Input ellipsoidal height (m, 4dp; NAD83 realization)
 lat_igs14 -- Latitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
 lon_igs14 -- Longitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
-eht_igs14_m -- Ellipsoidal height in ITRF2014/IGS14 (m, 4dp)
-coord_out_epoch -- Output epoch of the transformed coordinates
+igs14_ellip_h_m -- Ellipsoidal height in ITRF2014/IGS14 (m, 4dp)
+undulation_N_m -- xGEOID20B geoid undulation N (m, 4dp)
+igs14_orthometric_H_m -- Orthometric height H = igs14_ellip_h_m - N (m, 4dp)
 
 ### Batch log
 Written to `logs/` as `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`.
@@ -361,7 +355,6 @@ overwrite = always           ; always | never | prompt
 format    = csv              ; csv | json | xlsx  (comma-separated for multiple)
 
 [transform]
-enabled      = true          ; true | false
 input_frame  = 2011          ; 2011 | PA11 | MA11  (NAD83 realization of INPUT)
 input_epoch  = 2010.0        ; decimal year (recommended); calendar "M D Y" also OK
 output_epoch = 2010.0        ; decimal year (recommended); calendar "M D Y" also OK
@@ -384,9 +377,9 @@ Notes:
   given as a **decimal year** (recommended, e.g. `2010.0`); a calendar date
   (`1 1 2010`) is also accepted. For the NAD83(2011/PA11/MA11) → IGS14
   transform the nominal reference epoch is **2010.0 for both input and
-  output** (the defaults). Set `enabled = false` to skip the transform
-  (IGS14 columns are left blank). The transform uses the bundled NGS HTDP
-  utility and is **Windows-only**; see `HTDP/README.txt`.
+  output** (the defaults). The transform always runs; the bundled NGS HTDP
+  utility is required and the feature is **Windows-only**; see
+  `HTDP/README.txt`.
 
 ### GGXF file resolution
 The GGXF grid file location is resolved in this order:

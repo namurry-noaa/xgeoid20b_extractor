@@ -16,6 +16,16 @@ name: xgeoid
 channels:
   - conda-forge
 dependencies:
-  - python>=3.10
+  # Python is pinned to 3.12 for stable, universal package support. Newer
+  # interpreters (3.14 free-threaded) lack reliable wheels/builds for some
+  # dependencies and also emit GIL warnings from netCDF4. 3.12 avoids that.
+  - python=3.12
+  # Compiled scientific dependencies come from conda-forge, which resolves
+  # their binary libraries (HDF5, netCDF-C) far more reliably than pip.
   - netCDF4>=1.6.0
   - numpy>=1.23.0
+
+# NOTE: The optional horizontal coordinate transform (NAD83 realizations ->
+# IGS14) drives the bundled NGS HTDP utility (HTDP/htdp360.exe) via Python's
+# standard-library subprocess module. No extra packages are required for it.
+

@@ -5,6 +5,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-07-20
+
+### Added
+- **Horizontal coordinate transform to ITRF2014 / IGS14.** The tool now
+  transforms the input horizontal coordinates from their NAD83 realization
+  to ITRF2014/IGS14 using the bundled NGS HTDP utility, and appends the
+  transformed position as new output columns: `input_frame`, `lat_igs14`,
+  `lon_igs14`, `eht_igs14_m`, `coord_out_epoch`. The geoid/orthometric
+  computation is unchanged — it always uses the input coordinates.
+- Bundled `HTDP/htdp360.exe` (NGS HTDP v3.6.0) + `HTDP/README.txt`. HTDP is
+  driven via the standard-library `subprocess` module (no third-party
+  dependencies; **Windows-only** feature).
+- `[transform]` section in `config.ini`: `enabled`, `input_frame`
+  (`2011` / `PA11` / `MA11`), `input_epoch`, `output_epoch` (decimal year
+  recommended; calendar date also accepted), and optional `htdp_exe`
+  override. Output frame is fixed to IGS14 (HTDP code 25). For the
+  NAD83 → IGS14 transform the nominal reference epoch is 2010.0 for both
+  input and output (the defaults).
+- README: prominent **Horizontal Reference Frame input-requirement** block
+  (the user must supply the correct NAD83 realization; no auto-detection).
+
+### Changed
+- Documentation now states the input horizontal frame requirement as
+  NAD83(2011/PA11/MA11) rather than implying IGS14 input; IGS14 is the
+  transformed **output** frame.
+- Pinned the conda environment to Python 3.12 in `environment.yml` (avoids
+  bleeding-edge 3.14 build/GIL issues).
+
+### Backward compatibility
+- Non-breaking (MINOR). Existing output columns are unchanged; the IGS14
+  columns are appended. The transform can be disabled via config. Sample
+  geoid results are byte-for-byte identical to v2.2.0.
+
+### Validation status
+- Geodetically validated against manual NGS HTDP 3.6.0 runs for all three
+  supported realizations: NAD83(2011)→IGS14 (5 CONUS points),
+  NAD83(PA11)→IGS14 (5 Pacific points), and NAD83(MA11)→IGS14 (1 Marianas
+  point). The tool reproduces every reference coordinate to within 1e-9°
+  (~0.1 mm) and 1 mm in ellipsoidal height, at the nominal 2010.0 epoch.
+
 ## [2.2.0] - 2026-07-17
 
 ### Added

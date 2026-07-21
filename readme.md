@@ -74,11 +74,34 @@ The xGEOID20B model covers the following regions:
 
 | Parameter | Requirement |
 |---|---|
-| Horizontal Reference Frame | IGS14 |
+| Horizontal Reference Frame | **NAD83(2011) realization** (see below) |
 | Ellipsoid | GRS80 |
 | Latitude | Decimal degrees, positive north |
 | Longitude | positive-west convention (e.g., 133.024 for SE Alaska) |
-| Ellipsoidal Height | Meters, GRS80 ellipsoid, IGS14 reference frame |
+| Ellipsoidal Height | Meters, GRS80 ellipsoid |
+
+> ## ⚠️ HORIZONTAL REFERENCE FRAME — INPUT REQUIREMENT (read first)
+>
+> **Input coordinates MUST be in the correct NAD83(2011) realization for
+> their region.** This is the **user's responsibility** — the tool does
+> **not** verify or convert the input frame. Supplying the wrong frame
+> produces silently incorrect results.
+>
+> | Region | Required input frame | `input_frame` value |
+> |---|---|---|
+> | CONUS (incl. SE Alaska) | NAD83(2011/CORS96/2007) | `2011` |
+> | Pacific | NAD83(PA11/PACP00) | `PA11` |
+> | Marianas | NAD83(MA11/MARP00) | `MA11` |
+>
+> Declare the region's frame in `config.ini` under `[transform]`
+> (`input_frame`). You must set this correctly for your data; there is no
+> auto-detection.
+>
+> **Output:** the tool transforms these coordinates to **ITRF2014 / IGS14**
+> (via the bundled NGS HTDP utility) and adds the transformed
+> `lat_igs14`, `lon_igs14`, `eht_igs14_m` as extra output columns. The
+> geoid/orthometric computation itself always uses the **input**
+> coordinates and is unaffected by the transform.
 
 > **⚠️ Longitude Convention Warning:**
 > This tool expects **positive west** longitudes as exported by OPUS
@@ -86,12 +109,6 @@ The xGEOID20B model covers the following regions:
 > in the same input file. The script will detect negative longitudes, flag them
 > in the batch log, and skip negation for those rows — but mixed convention
 > inputs will likely produce incorrect results.
-
-> **📝 Reference Frame Note:**
-> OPUS-derived coordinates are in NAD83(2011), which is nominally equivalent
-> to IGS14 at the centimeter level for most practical applications. If
-> sub-centimeter accuracy is required, apply a formal frame transformation
-> prior to running this tool.
 
 
 ## Interpolation Method
@@ -252,6 +269,11 @@ orthometric_H_m -- Static orthometric height H (m, 4dp)
 epoch -- Processing epoch
 undulation_N_epoch_corrected_m -- Epoch-corrected undulation N (m, 4dp)
 orthometric_H_epoch_corrected_m -- Epoch-corrected orthometric height H (m, 4dp)
+input_frame -- NAD83 realization of the input coords (2011/PA11/MA11)
+lat_igs14 -- Latitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
+lon_igs14 -- Longitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
+eht_igs14_m -- Ellipsoidal height in ITRF2014/IGS14 (m, 4dp)
+coord_out_epoch -- Output epoch of the transformed coordinates
 
 2.  Batch Log — `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`
 
@@ -284,6 +306,13 @@ t0    = 2005.0
 
 [options]
 overwrite = always           ; always | never | prompt
+
+[transform]
+enabled      = true          ; true | false
+input_frame  = 2011          ; 2011 | PA11 | MA11  (NAD83 realization of INPUT)
+input_epoch  = 2010.0        ; decimal year (recommended); calendar "M D Y" also OK
+output_epoch = 2010.0        ; decimal year (recommended); calendar "M D Y" also OK
+htdp_exe     =               ; blank = bundled HTDP/htdp360.exe
 ```
 
 Notes:
@@ -293,6 +322,15 @@ Notes:
   exists (same-minute rerun): `always` overwrites silently (default),
   `never` skips and exits, `prompt` asks (interactive terminals only; in a
   non-interactive/piped run `prompt` behaves as `always`).
+- `[transform]` controls the horizontal coordinate transform to
+  ITRF2014/IGS14 (see the Horizontal Reference Frame requirement above).
+  `input_frame` **must** match your data's NAD83 realization. Epochs are
+  given as a **decimal year** (recommended, e.g. `2010.0`); a calendar date
+  (`1 1 2010`) is also accepted. For the NAD83(2011/PA11/MA11) → IGS14
+  transform the nominal reference epoch is **2010.0 for both input and
+  output** (the defaults). Set `enabled = false` to skip the transform
+  (IGS14 columns are left blank). The transform uses the bundled NGS HTDP
+  utility and is **Windows-only**; see `HTDP/README.txt`.
 
 ### GGXF file resolution
 The GGXF grid file location is resolved in this order:

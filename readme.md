@@ -2,8 +2,14 @@
 
 
 ## Overview
-This tool extracts geoid undulation values (N) from the NGS experimental 
-xGEOID20B geoid model and computes orthometric height (H) with supplied GRS80 ellipsoid height (h).
+This tool extracts geoid undulation values (N) from the NGS experimental
+xGEOID20B geoid model at a batch of points, and transforms each point's
+horizontal coordinates to the ITRF2014 / IGS14 frame (via the bundled NGS
+HTDP utility) so the reported location matches the model's frame.
+
+For each input point the tool reports the point's IGS14 latitude/longitude
+and the interpolated xGEOID20B undulation (N). xGEOID20B is a **static**
+geoid model, so no geoid epoch or velocity correction is applied.
 
 The xGEOID20B model is a deprecated research-grade geoid model and is no longer 
 available through NGS online tools.  However, this script provides legacy extraction capability against the xGEOID20 GGXF grid file, to which a link is provided below.
@@ -50,14 +56,11 @@ The xGEOID20 model consists of two variants:
 This tool uses the **B model exclusively**, as it incorporates airborne gravity 
 data and is considered the more accurate variant for the covered region.
 
-The orthometric height relationship used is:
-
-"H = h - N"
-
-Where:
-- `H` = orthometric height (m)
-- `h` = ellipsoidal height (m), GRS80, IGS14 frame
-- `N` = geoid undulation (m) from xGEOID20B
+The geoid undulation `N` is the separation between the reference ellipsoid
+and the geoid. It relates ellipsoidal height `h` and orthometric height `H`
+by `H = h - N`, but **this tool reports only `N`** (and the IGS14
+coordinates); computing `H` from a user's ellipsoidal height is left to the
+user, outside this tool's scope.
 
 
 ## Coverage
@@ -99,9 +102,9 @@ The xGEOID20B model covers the following regions:
 >
 > **Output:** the tool transforms these coordinates to **ITRF2014 / IGS14**
 > (via the bundled NGS HTDP utility) and reports the transformed
-> `lat_igs14`, `lon_igs14`, `igs14_ellip_h_m`. The orthometric height is
-> then computed as **H = igs14_ellip_h_m − N** (matching the archived NGS
-> web tool). The transform always runs and HTDP is required.
+> `lat_igs14`, `lon_igs14` alongside the xGEOID20B undulation `N`. The
+> transform always runs and HTDP is required. (The input ellipsoidal height
+> is required for the transform but is not reported.)
 
 > **⚠️ Longitude Convention Warning:**
 > This tool expects **positive west** longitudes as exported by OPUS
@@ -117,14 +120,12 @@ interpolation method specified in the xGEOID20 GGXF file metadata.
 
 
 ## Epoch
-| Parameter | Value |
-|---|---|
-| Model Reference Epoch (T0) | 2005.0 |
-| Processing Epoch | 2020.0 (January 1, 2020) |
+xGEOID20B is a **static** geoid model — it has no time/velocity component,
+so no geoid epoch is applied to the undulation N.
 
-Epoch correction uses the xDGEOID20 dynamic geoid velocity grid:
-
-N(t) = N + velocity * (t - T0)
+The only epoch used by this tool is for the **HTDP coordinate transform**
+(NAD83 realization → ITRF2014/IGS14). Its nominal reference epoch is
+**2010.0** for both input and output (see the Configuration section).
 
 
 ## Data File
@@ -248,10 +249,12 @@ the tool stops and lists them so you can remove the extras. See
 
 | Column | Meaning |
 |---|---|
-| `OPUS_PID` | Point identifier / label (any text) |
+| `pid` | Point identifier / label (any text) |
 | `lat` | Latitude, decimal degrees, positive north |
 | `lon` | Longitude, decimal degrees, **positive-west** (see below) |
-| `ellip_h_m` | Ellipsoidal height, meters (GRS80) |
+| `nad83_ellip` | Ellipsoidal height, meters (NAD83 / GRS80) |
+
+All coordinates are **decimal degrees**; heights are **meters**.
 
 **Header rules:**
 - **Case-insensitive** — `lat`, `LAT`, `Lat` are all accepted (likewise for
@@ -262,19 +265,19 @@ the tool stops and lists them so you can remove the extras. See
   file; the tool only reads the four above.
 - The first row **must** be the header row with these column names.
 
-The `OPUS_PID` *values* (your station labels) are used exactly as written;
+The `pid` *values* (your station labels) are used exactly as written;
 only the header names are normalized.
 
 Example (any of these header spellings/orders work):
 
 ```
-OPUS_PID,lat,lon,ellip_h_m
+pid,lat,lon,nad83_ellip
 BBFG38,55.03511259,133.0239682,-1.964
 BBBW71,55.09597375,131.2221351,-2.312
 ```
 
 ```
-LON,LAT,Ellip_H_M,OPUS_PID
+LON,LAT,NAD83_Ellip,PID
 133.0239682,55.03511259,-1.964,BBFG38
 ```
 
@@ -309,15 +312,12 @@ All formats contain the **same data**. Files are named
 
 Column description (same for every format):
 
-OPUS_PID -- NGS OPUS Permanent Identifier
+pid -- Point identifier / label (echoed from input)
 lat -- Input latitude (decimal degrees, 8dp)
 lon -- Input longitude (decimal degrees, 8dp)
-ellip_h_m -- Input ellipsoidal height (m, 4dp; NAD83 realization)
 lat_igs14 -- Latitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
 lon_igs14 -- Longitude transformed to ITRF2014/IGS14 (decimal degrees, 8dp)
-igs14_ellip_h_m -- Ellipsoidal height in ITRF2014/IGS14 (m, 4dp)
 undulation_N_m -- xGEOID20B geoid undulation N (m, 4dp)
-igs14_orthometric_H_m -- Orthometric height H = igs14_ellip_h_m - N (m, 4dp)
 
 ### Batch log
 Written to `logs/` as `<inputbase>_batch_log_YYYYMMDDThhmmZ.txt`.
@@ -347,8 +347,6 @@ log_dir    = logs
 
 [model]
 model = xGEOID20B
-epoch = 2020.0
-t0    = 2005.0
 
 [options]
 overwrite = always           ; always | never | prompt
@@ -392,8 +390,8 @@ copy point at a single grid file without editing the script. See the
 [Data File](#data-file) section and `GGXF/README.txt`.
 
 
-## Sample Test
-Sample test files `input/ak_example_input.csv` and
+## Sample Dataset
+Sample data files `input/ak_example_input.csv` and
 `output/ak_example_output.csv` are included in the repository to verify the
 tool is working correctly. Run the script; it reads the sample input and
 writes a UTC-timestamped output file to `output/`. Confirm the computed
@@ -406,6 +404,20 @@ output, which is considered the reference standard for this tool.
 ## Validation
 This tool has been validated against archived NGS xGEOID20B web tool output
 for benchmark points in the southeastern Alaska panhandle region.  Observed differences are consistently within 0.001—0.004 m, well within the model's stated operational accuracy of ±0.01 m.
+
+The **`validation/`** folder contains a developer regression check,
+`validation/test_htdp_transform.py`, which verifies the HTDP horizontal
+coordinate transform (NAD83 → IGS14) against 11 reference points produced
+manually with NGS HTDP 3.6.0 (5 CONUS, 5 Pacific, 1 Marianas). Run it from
+the repository root with:
+
+```
+python validation/test_htdp_transform.py
+```
+
+It prints `RESULT: all 11 points match reference (PASS)` and exits non-zero
+on any mismatch. This is a code check, separate from the sample dataset
+above. See `validation/README.txt`.
 
 
 ## License

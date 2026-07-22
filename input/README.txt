@@ -10,13 +10,13 @@ and ends in .csv (case-insensitive), e.g.:
 
 REQUIRED COLUMNS
 ------------------------------------------------------------
-    OPUS_PID,lat,lon,ellip_h_m
+    pid,lat,lon,nad83_ellip
 
-  OPUS_PID   - NGS OPUS Permanent Identifier (any string label)
-  lat        - Latitude, decimal degrees, positive north
-  lon        - Longitude, decimal degrees, positive-WEST (NGS/OPUS
-               convention, e.g. 133.024 for SE Alaska)
-  ellip_h_m  - Ellipsoidal height, meters (GRS80)
+  pid          - Point identifier / label (any string)
+  lat          - Latitude, decimal degrees, positive north
+  lon          - Longitude, decimal degrees, positive-WEST (NGS/OPUS
+                 convention, e.g. 133.024 for SE Alaska)
+  nad83_ellip  - Ellipsoidal height, meters (NAD83 / GRS80)
 
   Header names are CASE-INSENSITIVE (lat = LAT = Lat), surrounding
   whitespace is ignored, and COLUMN ORDER does not matter. Extra

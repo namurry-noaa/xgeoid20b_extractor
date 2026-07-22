@@ -29,6 +29,10 @@ function Fail {
     Write-Host ""
     Write-Host "ERROR: $Message" -ForegroundColor Red
     Write-Host ""
+    # Hold the window open so the error is readable when launched by
+    # double-click (where it would otherwise close instantly).
+    Write-Host "Press any key to close..."
+    [void][System.Console]::ReadKey($true)
     exit 1
 }
 

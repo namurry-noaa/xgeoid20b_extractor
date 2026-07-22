@@ -14,7 +14,7 @@ output. Covers all three supported realizations:
 Run (from the repo root, in an environment with the tool importable and the
 bundled HTDP/htdp360.exe present; Windows only):
 
-    python tests/test_htdp_transform.py
+    python validation/test_htdp_transform.py
 
 Exits non-zero if any transformed coordinate differs from the reference by
 more than the tolerance below.
@@ -23,7 +23,7 @@ more than the tolerance below.
 import os
 import sys
 
-# Make the tool importable when run from the repo root or the tests/ dir.
+# Make the tool importable when run from the repo root or the validation/ dir.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 sys.path.insert(0, _REPO)

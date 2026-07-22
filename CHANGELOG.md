@@ -5,6 +5,48 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.0] - 2026-07-22
+
+Major release that **redefines the tool's scope**. It now does one thing:
+for each input point, transform its horizontal coordinates to ITRF2014 /
+IGS14 (via NGS HTDP) and report those coordinates together with the
+xGEOID20B geoid undulation (N). Height computation and epoch/velocity
+handling have been removed as out of scope.
+
+### Changed (breaking)
+- **Output columns are now:** `pid, lat, lon, lat_igs14, lon_igs14,
+  undulation_N_m`. All height and epoch columns from the 2.x series are
+  gone.
+- **Input columns renamed:** `OPUS_PID` → `pid`, `ellip_h_m` →
+  `nad83_ellip`. The four required input columns are now
+  `pid, lat, lon, nad83_ellip` (still case-insensitive, any order).
+  `nad83_ellip` is still required — HTDP needs it for the 3D coordinate
+  transform — but it is no longer echoed to the output.
+
+### Removed
+- Orthometric- and ellipsoidal-height outputs (out of scope; the user can
+  compute `H = h − N` themselves if needed).
+- All geoid epoch/velocity handling: the xDGEOID20 velocity grid, the
+  `undulation_N_corrected` computation, and the `[model] epoch` / `t0`
+  settings. xGEOID20B is a *static* geoid, so none of this applies. (The
+  only remaining epoch is for the HTDP coordinate transform, in
+  `[transform]`, nominal 2010.0.)
+
+### Fixed
+- `run.ps1` now also pauses on launcher pre-check errors (conda /
+  environment / file resolution), not just on Python run errors, so the
+  window no longer closes instantly when launched by double-click.
+
+### Notes
+- Validated against the archived NGS xGEOID20B web tool output for a
+  316-point Alaska dataset: IGS14 lat/lon match to sub-meter and the
+  undulation N agrees to ~5 mm. The HTDP transform regression test (all
+  three NAD83 realizations) still passes.
+
+## [2.5.0]
+
+_Developed on the same branch; superseded by 3.0.0 before release._
+
 ## [2.4.3] - 2026-07-21
 
 ### Fixed

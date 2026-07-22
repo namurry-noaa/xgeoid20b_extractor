@@ -38,7 +38,7 @@
 #       coordinate transform (nominal 2010.0 for NAD83 -> IGS14).
 #
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    3.0.0
+# Version:                    3.0.1
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -63,7 +63,7 @@ import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '3.0.0'
+__version__ = '3.0.1'
 
 
 # --- File Paths ---

@@ -18,7 +18,7 @@ logs/*
 !logs/README.txt
 
 # Internal LLM session notes — personal working notes, not committed.
-summary.claude
+*.claude
 
 # GGXF grid file — ~403 MB, downloaded by user, never committed.
 # The GGXF/README.txt is kept so the folder and instructions are tracked.

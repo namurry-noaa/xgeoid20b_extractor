@@ -5,6 +5,12 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.1] - 2026-07-22
+
+### Changed
+- `.gitignore` now ignores all `*.claude` files (was a single exact-match
+  rule), so per-project local notes files are ignored automatically.
+
 ## [3.0.0] - 2026-07-22
 
 Major release that **redefines the tool's scope**. It now does one thing:

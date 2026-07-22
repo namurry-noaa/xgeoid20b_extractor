@@ -12,13 +12,13 @@
 #     Pacific                 -> NAD83(PA11/PACP00)        [input_frame PA11]
 #     Marianas                -> NAD83(MA11/MARP00)        [input_frame MA11]
 # The tool transforms these to ITRF2014 / IGS14 (via bundled NGS HTDP) and
-# appends the transformed lat/lon/eht as output columns. The geoid math
-# always uses the INPUT coordinates and is unaffected by the transform.
+# reports the transformed lat/lon alongside the xGEOID20B undulation N.
 # Set the realization in config.ini [transform] input_frame.
 #
 # Ellipsoid:                  GRS80
 # Latitude/Longitude:         Decimal degrees
-# Ellipsoidal Height:         Meters
+# Ellipsoidal Height:         Meters (input only; required for the HTDP
+#                             coordinate transform, not reported as output)
 # 
 # --- LONGITUDE CONVENTION WARNING ---
 # This script expects POSITIVE WEST longitudes as exported by
@@ -33,16 +33,12 @@
 #          results. Ensure all longitudes in the input file use the same
 #          convention
 #
-# NOTE: OPUS-derived coordinates and ellipsoidal heights are in NAD83(2011),
-#       which is nominally equivalent to IGS14 at the cm level for most
-#       practical geodetic applications. If sub-centimeter accuracy is
-#       required, a formal frame transformation should be applied prior
-#       to running this script.
+# NOTE: xGEOID20B is a STATIC geoid model (no time/velocity component), so
+#       no geoid epoch is applied. The only epoch used is for the HTDP
+#       coordinate transform (nominal 2010.0 for NAD83 -> IGS14).
 #
-# Reference Epoch T0:         2005.0
-# Processing Epoch:           2020.0 (January 1, 2020)
 # Author:                     Nate Murry, NOAA/NOS/CO-OPS, 7/16/2026
-# Version:                    2.4.3
+# Version:                    3.0.0
 #
 # --- DEFAULT BEHAVIOR (out-of-the-box) ---
 # The tool runs NON-INTERACTIVELY by default:
@@ -67,7 +63,7 @@ import shutil
 from datetime import datetime, timezone
 
 
-__version__ = '2.4.3'
+__version__ = '3.0.0'
 
 
 # --- File Paths ---
@@ -112,8 +108,6 @@ DEFAULTS = {
     'output_dir': 'output',
     'log_dir': 'logs',
     'model': 'xGEOID20B',
-    'epoch': 2020.0,
-    't0': 2005.0,
     'overwrite': 'always',
     'format': 'csv',
     'input_frame': '2011',
@@ -126,10 +120,8 @@ DEFAULTS = {
 SUPPORTED_FORMATS = ('csv', 'json', 'xlsx')
 
 
-# --- Constants (populated from config in run_batch; defaults here) ---
+# --- Constants (populated from config in run_batch; default here) ---
 MODEL = 'xGEOID20B'
-EPOCH = 2020.0
-T0 = 2005.0
 
 
 # --- Region Definitions ---
@@ -166,13 +158,6 @@ REGIONS = {
             'var': 'geoidHeightB',
             'lat0': -16.0, 'lon0': 186.0, 'dlat': 1/60, 'dlon': 1/60,
             'nrows': None, 'ncols': None, 'priority': 2
-        },
-    },
-    'xDGEOID20': {
-        'Global': {
-            'var': 'geoidVelocity',
-            'lat0': -89.75, 'lon0': 0.0, 'dlat': 0.25, 'dlon': 0.25,
-            'nrows': None, 'ncols': None, 'priority': 1
         },
     },
 }
@@ -219,7 +204,7 @@ def correct_ngs_lon(lon, pid='UNKNOWN'):
     lon : float
         Input longitude value.
     pid : str
-        OPUS_PID of the point, used for log warning if needed.
+        pid of the point, used for log warning if needed.
 
     Returns
     -------
@@ -232,7 +217,7 @@ def correct_ngs_lon(lon, pid='UNKNOWN'):
     if lon < 0:
         # Negative longitude detected — possible convention mismatch
         warning = (
-            f"  OPUS_PID: {pid}\n"
+            f"  PID: {pid}\n"
             f"  Warning:  Negative longitude ({lon}) detected. "
             f"Script expects NGS positive-west convention.\n"
             f"  Action:   Sign NOT negated — passed through as-is.\n"
@@ -309,8 +294,8 @@ def load_config():
     Returns
     -------
     dict
-        Resolved configuration with keys: ggxf_file, input_dir, output_dir,
-        model, epoch (float), t0 (float), overwrite.
+        Resolved configuration (paths, model, overwrite, format list, and
+        the transform frame/epochs).
     """
     cfg = dict(DEFAULTS)
     config_path = os.path.join(SCRIPT_DIR, CONFIG_FILENAME)
@@ -343,17 +328,6 @@ def load_config():
         cfg['input_epoch'] = get('transform', 'input_epoch', cfg['input_epoch'])
         cfg['output_epoch'] = get('transform', 'output_epoch', cfg['output_epoch'])
         cfg['htdp_exe'] = get('transform', 'htdp_exe', cfg['htdp_exe'])
-
-        # Numeric fields
-        for key, section in (('epoch', 'model'), ('t0', 'model')):
-            raw = get(section, key, None)
-            if raw is not None:
-                try:
-                    cfg[key] = float(raw)
-                except ValueError:
-                    print(f"WARNING: config {section}.{key} = '{raw}' is not "
-                          f"numeric; using default {DEFAULTS[key]}.")
-                    cfg[key] = DEFAULTS[key]
 
     # Validate overwrite value
     if cfg['overwrite'] not in ('always', 'never', 'prompt'):
@@ -885,9 +859,9 @@ def biquadratic_interp(grid_data, i_frac, j_frac, nrows, ncols):
 # Grid Extraction
 # =============================================================================
 
-def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
+def extract_value(ds, lat, lon, pid='UNKNOWN'):
     """
-    Extract geoid undulation and compute orthometric height.
+    Extract the (static) xGEOID20B geoid undulation at a point.
 
     Parameters
     ----------
@@ -897,15 +871,13 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
         Latitude in decimal degrees.
     lon : float
         Longitude in decimal degrees. NGS positive-west convention expected.
-    epoch : float
-        Decimal year for epoch correction.
     pid : str
-        OPUS_PID for longitude warning reporting.
+        pid for longitude warning reporting.
 
     Returns
     -------
     dict or None
-        All extracted and computed values, or None if point not in any grid.
+        Extracted values, or None if the point is not in any grid region.
     """
 
     # --- Correct positive-west longitude convention ---
@@ -938,42 +910,14 @@ def extract_value(ds, lat, lon, epoch=EPOCH, pid='UNKNOWN'):
     def grid_data(i, j):
         return safe_node_value(var, i, j)
 
-    # --- Static interpolation ---
+    # --- Static geoid undulation via biquadratic interpolation ---
     undulation_N, edge_clamped = biquadratic_interp(
         grid_data, i_frac, j_frac, nrows, ncols
     )
 
-    # --- Velocity correction ---
-    vel_candidates = []
-    for region_name_v, meta_v in REGIONS['xDGEOID20'].items():
-        if point_in_grid(lat, lon360, meta_v):
-            vel_candidates.append((meta_v['priority'], region_name_v, meta_v))
-
-    undulation_N_corrected = None
-    if vel_candidates:
-        vel_candidates.sort(key=lambda x: x[0], reverse=True)
-        _, vel_region, vel_meta = vel_candidates[0]
-
-        vel_grp = ds.groups['xDGEOID20'].groups[vel_region]
-        vel_var = vel_grp.variables['geoidVelocity']
-
-        vel_i_frac = (lat - vel_meta['lat0']) / vel_meta['dlat']
-        vel_j_frac = (lon360 - vel_meta['lon0']) / vel_meta['dlon']
-
-        def vel_grid_data(i, j):
-            return safe_node_value(vel_var, i, j)
-
-        velocity, _ = biquadratic_interp(
-            vel_grid_data, vel_i_frac, vel_j_frac,
-            vel_meta['nrows'], vel_meta['ncols']
-        )
-
-        undulation_N_corrected = undulation_N + velocity * (epoch - T0)
-
     return {
         'region': region_name,
         'undulation_N': undulation_N,
-        'undulation_N_corrected': undulation_N_corrected,
         'lon360': lon360,
         'lon_warning': lon_warning,
         'edge_clamped': edge_clamped,
@@ -1050,13 +994,11 @@ def write_xlsx(path, fieldnames, rows):
 
 def run_batch():
     """Main batch processing function."""
-    global MODEL, EPOCH, T0
+    global MODEL
 
     # --- Load configuration (config.ini, with fallback to defaults) ---
     config = load_config()
     MODEL = config['model']
-    EPOCH = config['epoch']
-    T0 = config['t0']
     overwrite_mode = config['overwrite']
     input_dir = resolve_dir(config['input_dir'])
     output_dir = resolve_dir(config['output_dir'])
@@ -1109,7 +1051,6 @@ def run_batch():
     print(f"  Formats:  {', '.join(formats)}")
     print(f"  Log:      {os.path.basename(log_path)}")
     print(f"  Model:    {MODEL}")
-    print(f"  Epoch:    {EPOCH}")
     print(f"  Overwrite:{overwrite_mode}")
     print(f"  Transform:{config['input_frame']} -> {HTDP_OUTPUT_FRAME_NAME} "
           f"(epochs {config['input_epoch']} -> {config['output_epoch']})")
@@ -1117,12 +1058,12 @@ def run_batch():
     print(f"{'='*60}\n")
 
     # --- Read input CSV ---
-    # Required columns: OPUS_PID, lat, lon, ellip_h_m. Header matching is
+    # Required columns: pid, lat, lon, nad83_ellip. Header matching is
     # CASE-INSENSITIVE and tolerant of surrounding whitespace, and column
     # ORDER does not matter. Each header is normalized (trimmed + lowercased)
     # and mapped to its canonical name; extra columns are ignored. Data
-    # values (e.g. the OPUS_PID station labels) are left exactly as-is.
-    canonical_columns = ['OPUS_PID', 'lat', 'lon', 'ellip_h_m']
+    # values (e.g. the pid station labels) are left exactly as-is.
+    canonical_columns = ['pid', 'lat', 'lon', 'nad83_ellip']
     canon_by_lower = {c.lower(): c for c in canonical_columns}
     try:
         with open(input_path, 'r', encoding='utf-8-sig', newline='') as f:
@@ -1210,7 +1151,7 @@ def run_batch():
         try:
             lat = float(row['lat'])
             lon = float(row['lon'])
-            eht = float(row['ellip_h_m'])
+            eht = float(row['nad83_ellip'])
         except (KeyError, ValueError, TypeError):
             continue
         lon_pw = htdp_positive_west_lon(lon)
@@ -1235,43 +1176,40 @@ def run_batch():
 
     # --- Output columns ---
     output_fieldnames = [
-        'OPUS_PID',
+        'pid',
         'lat',
         'lon',
-        'ellip_h_m',
         'lat_igs14',
         'lon_igs14',
-        'igs14_ellip_h_m',
         'undulation_N_m',
-        'igs14_orthometric_H_m',
     ]
 
     # --- Build all output rows once (then serialize to each format) ---
     out_rows = []
     for idx, row in enumerate(rows, start=1):
-        pid = row.get('OPUS_PID', f'ROW_{idx}').strip()
+        pid = row.get('pid', f'ROW_{idx}').strip()
 
         print(f"  Processing {pid:<12} ({idx} of {total})...", end=' ')
 
         # IGS14 transformed coordinates for this row (from HTDP).
         igs14 = igs14_by_idx.get(idx)   # (lat, lon, eht) or None
         if igs14 is not None:
-            lat_i, lon_i, eht_i = igs14
+            lat_i, lon_i, _eht_i = igs14
             igs14_cols = {
                 'lat_igs14': f"{lat_i:.8f}",
                 'lon_igs14': f"{lon_i:.8f}",
-                'igs14_ellip_h_m': f"{eht_i:.4f}",
             }
         else:
-            lat_i = lon_i = eht_i = None
-            igs14_cols = {'lat_igs14': '', 'lon_igs14': '', 'igs14_ellip_h_m': ''}
+            igs14_cols = {'lat_igs14': '', 'lon_igs14': ''}
 
         try:
             lat = float(row['lat'])
             lon = float(row['lon'])
-            ellip_h = float(row['ellip_h_m'])
+            # nad83_ellip is required input (fed to HTDP for the transform)
+            # but is not part of the output.
+            _ellip_h = float(row['nad83_ellip'])
 
-            result = extract_value(ds, lat, lon, epoch=EPOCH, pid=pid)
+            result = extract_value(ds, lat, lon, pid=pid)
 
             # Capture any longitude convention warning
             if result and result['lon_warning'] is not None:
@@ -1281,13 +1219,11 @@ def run_batch():
             if result is None:
                 # Point outside all grids
                 out_rows.append({
-                    'OPUS_PID': pid,
+                    'pid': pid,
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
-                    'ellip_h_m': f"{ellip_h:.4f}",
                     **igs14_cols,
                     'undulation_N_m': 'NaN',
-                    'igs14_orthometric_H_m': 'NaN',
                 })
                 nan_count += 1
                 errors.append((pid, 'Point outside all grid regions'))
@@ -1296,28 +1232,17 @@ def run_batch():
             else:
                 N = result['undulation_N']
 
-                # Orthometric height uses the IGS14 ellipsoidal height:
-                #   H = h_IGS14 - N
-                # (matches the archived web tool exactly). Requires the
-                # transformed height; blank if the transform gave nothing.
-                if eht_i is not None:
-                    H_igs14 = f"{(eht_i - N):.4f}"
-                else:
-                    H_igs14 = 'NaN'
-
                 # Note points whose interpolation stencil was clamped
                 # at a grid edge (result is a mild extrapolation).
                 if result.get('edge_clamped'):
                     edge_warnings.append((pid, result['region']))
 
                 out_rows.append({
-                    'OPUS_PID': pid,
+                    'pid': pid,
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
-                    'ellip_h_m': f"{ellip_h:.4f}",
                     **igs14_cols,
                     'undulation_N_m': f"{N:.4f}",
-                    'igs14_orthometric_H_m': H_igs14,
                 })
                 successful += 1
                 print('OK')
@@ -1326,26 +1251,21 @@ def run_batch():
             # Unexpected error on this row
             try:
                 row_out = {
-                    'OPUS_PID': pid,
+                    'pid': pid,
                     'lat': f"{lat:.8f}",
                     'lon': f"{lon:.8f}",
-                    'ellip_h_m': f"{ellip_h:.4f}",
                     **igs14_cols,
                     'undulation_N_m': 'NaN',
-                    'igs14_orthometric_H_m': 'NaN',
                 }
             except Exception:
                 # Fallback if lat/lon never parsed — write raw strings
                 row_out = {
-                    'OPUS_PID': pid,
+                    'pid': pid,
                     'lat': row.get('lat', 'NaN'),
                     'lon': row.get('lon', 'NaN'),
-                    'ellip_h_m': row.get('ellip_h_m', 'NaN'),
                     'lat_igs14': '',
                     'lon_igs14': '',
-                    'igs14_ellip_h_m': '',
                     'undulation_N_m': 'NaN',
-                    'igs14_orthometric_H_m': 'NaN',
                 }
             out_rows.append(row_out)
             nan_count += 1
@@ -1413,8 +1333,6 @@ def run_batch():
         log_f.write(f'  Output File(s):  {", ".join(written_files) if written_files else "(none)"}\n')
         log_f.write(f'  Formats:         {", ".join(formats)}\n')
         log_f.write(f'  Model:           {MODEL}\n')
-        log_f.write(f'  Epoch:           {EPOCH}\n')
-        log_f.write(f'  Reference T0:    {T0}\n')
         log_f.write(f'  Overwrite Mode:  {overwrite_mode}\n')
         log_f.write(f'  GGXF File:       {ggxf_path}\n')
         log_f.write(f'  Horiz Transform: {config["input_frame"]} -> '
@@ -1447,7 +1365,7 @@ def run_batch():
             log_f.write('  inward, so the result is a mild extrapolation rather\n')
             log_f.write('  than a true interpolation. Verify these results:\n\n')
             for pid, region in edge_warnings:
-                log_f.write(f'  OPUS_PID: {pid}  (region: {region})\n')
+                log_f.write(f'  PID: {pid}  (region: {region})\n')
             log_f.write('  ' + '-'*40 + '\n')
         else:
             log_f.write('\n  Grid edges: No points required edge clamping. OK.\n')
@@ -1455,7 +1373,7 @@ def run_batch():
         if errors:
             log_f.write('\n  --- NaN / Error Detail ---\n\n')
             for pid, reason in errors:
-                log_f.write(f'  OPUS_PID: {pid}\n')
+                log_f.write(f'  PID: {pid}\n')
                 log_f.write(f'  Reason:   {reason}\n')
                 log_f.write('  ' + '-'*40 + '\n')
         else:

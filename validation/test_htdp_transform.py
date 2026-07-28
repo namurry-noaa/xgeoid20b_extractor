@@ -28,7 +28,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 sys.path.insert(0, _REPO)
 
-import xgeoid20b_batch_extract as m  # noqa: E402
+import xgeoid20b_extractor as m  # noqa: E402
 
 # Tolerances: 1e-9 degrees (~0.1 mm horizontally) and 1 mm in height.
 TOL_DEG = 1e-9

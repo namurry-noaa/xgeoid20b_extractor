@@ -5,7 +5,7 @@
 .DESCRIPTION
     Selects the conda environment to run in (per the [runtime] section of
     config.ini), verifies conda + the environment + required packages, then
-    runs xgeoid20b_batch_extract.py in that environment.
+    runs xgeoid20b_extractor.py in that environment.
 
     Conda is the recommended package manager: netCDF4/numpy depend on
     compiled binaries (HDF5, netCDF-C) that conda resolves far more reliably
@@ -21,7 +21,7 @@ $ErrorActionPreference = 'Stop'
 # --- Locate ourselves ---
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigPath = Join-Path $ScriptDir 'config.ini'
-$PyScript   = Join-Path $ScriptDir 'xgeoid20b_batch_extract.py'
+$PyScript   = Join-Path $ScriptDir 'xgeoid20b_extractor.py'
 $EnvYml     = Join-Path $ScriptDir 'environment.yml'
 
 function Fail {
@@ -120,7 +120,7 @@ conda environment '$EnvName' not found under:
 # Main
 # =============================================================================
 if (-not (Test-Path -LiteralPath $PyScript)) {
-    Fail "Cannot find xgeoid20b_batch_extract.py next to run.ps1."
+    Fail "Cannot find xgeoid20b_extractor.py next to run.ps1."
 }
 
 $rt = Get-RuntimeConfig -Path $ConfigPath

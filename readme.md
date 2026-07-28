@@ -231,7 +231,7 @@ dependencies:
 
 ```
 conda activate xgeoid
-python xgeoid20b_batch_extract.py
+python xgeoid20b_extractor.py
 ```
 
 In this case the `[runtime]` section is ignored (it is only used by

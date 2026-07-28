@@ -197,7 +197,7 @@ _Superseded by 2.4.3 (developed on the same branch); not released._
 ### Backward compatibility
 - Non-breaking (MINOR). The Python tool is unchanged in behavior; the
   launcher and environment definition are additive. You can still run
-  `python xgeoid20b_batch_extract.py` directly in any environment that has
+  `python xgeoid20b_extractor.py` directly in any environment that has
   the dependencies.
 
 ## [2.1.0] - 2026-07-17

@@ -88,7 +88,13 @@ GGXF_DOWNLOAD_URL = 'https://geodesy.noaa.gov/research/data/xGEOID20.ggxf'
 # The bundled NGS HTDP utility performs the NAD83 realization -> IGS14
 # transform. It is driven via stdlib subprocess (no third-party deps).
 HTDP_DIR = os.path.join(SCRIPT_DIR, 'HTDP')
-HTDP_FILENAME = 'htdp360.exe'
+HTDP_FILENAME = 'htdp360.exe'          # bundled Windows prebuilt
+# Native (non-Windows) HTDP binary names to also look for. On Linux/macOS the
+# bundled .exe won't run; a native HTDP (built from NGS Fortran, e.g. the sibling
+# napgd2022_extractor's htdp/htdp) is used instead. Resolution also honors the
+# XGEOID_HTDP environment variable and the config.ini [transform] htdp_exe path.
+HTDP_NATIVE_NAMES = ('htdp', 'htdp360')
+HTDP_ENV_VAR = 'XGEOID_HTDP'
 
 # HTDP input reference-frame menu codes for the supported NAD83 realizations.
 HTDP_INPUT_FRAME_CODES = {
@@ -565,7 +571,10 @@ def resolve_htdp_path(config_htdp_exe=''):
 
     Order:
       1. config.ini [transform] htdp_exe, if set.
-      2. bundled HTDP/htdp360.exe in the script directory.
+      2. XGEOID_HTDP environment variable, if set.
+      3. a NATIVE htdp binary (htdp / htdp360) in the bundled HTDP/ dir
+         (for Linux/macOS, where the .exe cannot run).
+      4. bundled HTDP/htdp360.exe in the script directory (Windows).
 
     Returns
     -------
@@ -587,16 +596,32 @@ def resolve_htdp_path(config_htdp_exe=''):
             f"exist:\n    {p}\n"
         )
 
+    # environment override (portable; e.g. point at a native Linux HTDP)
+    env_htdp = os.environ.get(HTDP_ENV_VAR, '').strip()
+    if env_htdp:
+        if os.path.isfile(env_htdp):
+            return env_htdp
+        raise FileNotFoundError(
+            f"{HTDP_ENV_VAR} points to a file that does not exist:\n    {env_htdp}\n"
+        )
+
+    # native binary in the bundled HTDP dir (Linux/macOS)
+    for name in HTDP_NATIVE_NAMES:
+        cand = os.path.join(HTDP_DIR, name)
+        if os.path.isfile(cand):
+            return cand
+
     bundled = os.path.join(HTDP_DIR, HTDP_FILENAME)
     if os.path.isfile(bundled):
         return bundled
 
     raise FileNotFoundError(
         "HTDP executable not found.\n\n"
-        "  Expected bundled location:\n"
-        f"    {bundled}\n\n"
-        "  Restore HTDP/htdp360.exe, or set htdp_exe in config.ini "
-        "[transform].\n"
+        "  Looked for (in order): config.ini [transform] htdp_exe; "
+        f"${HTDP_ENV_VAR}; native {HTDP_NATIVE_NAMES} in {HTDP_DIR}; "
+        f"and bundled {HTDP_FILENAME}.\n\n"
+        "  Restore HTDP/htdp360.exe (Windows), provide a native htdp binary, "
+        f"set ${HTDP_ENV_VAR}, or set htdp_exe in config.ini [transform].\n"
     )
 
 

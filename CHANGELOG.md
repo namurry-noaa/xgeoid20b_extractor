@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-08-27
+
+### Added
+- `resolve_htdp_path()` now also finds a native `htdp` / `htdp360` binary in
+  `HTDP/`, and honors a new `XGEOID_HTDP` environment variable, so the tool
+  can run on Linux/macOS (driving a native HTDP build) without requiring the
+  bundled Windows `.exe`. Resolution order: `config.ini` `htdp_exe` ->
+  `XGEOID_HTDP` env var -> native binary in `HTDP/` -> bundled `.exe`.
+
+### Backward compatibility
+- Non-breaking (MINOR). Windows behavior and existing `config.ini` files are
+  unchanged; this only adds new HTDP-resolution options.
+
 ## [3.0.1] - 2026-07-22
 
 ### Changed
